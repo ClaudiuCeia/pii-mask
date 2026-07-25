@@ -73,14 +73,14 @@ const measure = (
   operation: () => unknown,
   iterationsPerSample: number,
 ): BenchmarkResult => {
-  for (let round = 0; round < 7; round += 1) {
+  for (let round = 0; round < 3; round += 1) {
     for (let iteration = 0; iteration < iterationsPerSample; iteration += 1) {
       consume(operation());
     }
   }
 
   const samples: number[] = [];
-  for (let round = 0; round < 21; round += 1) {
+  for (let round = 0; round < 13; round += 1) {
     const startedAt = Bun.nanoseconds();
     for (let iteration = 0; iteration < iterationsPerSample; iteration += 1) {
       consume(operation());
@@ -214,11 +214,11 @@ const results = [
     () => protectedLogger.info(uniquePayload(), "POST /api/users/verify"),
     20,
   ),
-  measure("log/large/plain", () => plainLogger.info(largePayload, "batch import finished"), 2),
+  measure("log/large/plain", () => plainLogger.info(largePayload, "batch import finished"), 1),
   measure(
     "log/large/protected",
     () => protectedLogger.info(largePayload, "batch import finished"),
-    2,
+    1,
   ),
 ];
 
