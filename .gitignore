@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+.benchmarks/
+*.tgz
+.DS_Store
