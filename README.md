@@ -4,6 +4,7 @@ Deterministic PII masking and redaction for TypeScript applications and logs.
 
 [![CI](https://github.com/ClaudiuCeia/pii-mask/actions/workflows/ci.yml/badge.svg)](https://github.com/ClaudiuCeia/pii-mask/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@claudiu-ceia/pii-mask.svg)](https://www.npmjs.com/package/@claudiu-ceia/pii-mask)
+[![jsr](https://jsr.io/badges/@claudiu-ceia/pii-mask.svg)](https://jsr.io/@claudiu-ceia/pii-mask)
 [![license](https://img.shields.io/npm/l/@claudiu-ceia/pii-mask?style=flat-square&label=license)](LICENSE)
 
 `pii-mask` uses [`@claudiu-ceia/ts-duckling`](https://github.com/ClaudiuCeia/ts-duckling) directly for local, grammar-based PII detection. It adds masking and redaction policies, immutable structured-value traversal, and opt-in plugins for Pino and Winston. There are no network calls and no logger monkeypatching.
