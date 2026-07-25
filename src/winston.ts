@@ -1,6 +1,15 @@
+/**
+ * Winston integration for automatic PII masking.
+ *
+ * Returns a {@link Logform.Format} that scans every log entry's `message`
+ * and metadata fields before downstream formats like `json()` serialise it.
+ *
+ * @module
+ */
 import { format, type Logform } from "winston";
 import { createPiiMasker, type PiiMaskerOptions } from "./index.js";
 
+/** Options accepted by {@link winstonPiiMasking}. Same as {@link PiiMaskerOptions}. */
 export type WinstonPiiMaskingOptions = PiiMaskerOptions;
 
 /**

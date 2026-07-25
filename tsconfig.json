@@ -19,5 +19,5 @@
     "types": ["bun"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
-  "exclude": ["dist", "node_modules"]
+  "exclude": ["dist", "node_modules", "test/deno-smoke.ts"]
 }

@@ -1,13 +1,25 @@
+/**
+ * Deterministic PII masking and redaction for TypeScript.
+ *
+ * Uses {@link findPii} to locate sensitive spans via ts-duckling, then
+ * replaces them with masked (`***`) or redacted (`[REDACTED]`) values.
+ * Structured-value traversal handles plain objects, arrays, and Errors
+ * without mutation.
+ *
+ * @module
+ */
 import { Duckling, PIIParsers, type PIIEntity } from "@claudiu-ceia/ts-duckling";
 
 /** A PII entity kind recognized by ts-duckling's built-in PII parsers. */
 export type PIIKind = PIIEntity["kind"];
 
+/** Base options for selecting which PII entity kinds to transform. */
 export interface PIISelectionOptions {
   /** Restrict transformation to these entity kinds. All PII kinds are used by default. */
   kinds?: readonly PIIKind[];
 }
 
+/** Options for masking PII with `*` characters while preserving edges. */
 export interface MaskOptions extends PIISelectionOptions {
   /** Token repeated over masked characters. Defaults to `"*"`. */
   mask?: string;
@@ -17,11 +29,13 @@ export interface MaskOptions extends PIISelectionOptions {
   keepEnd?: number;
 }
 
+/** Options for redacting PII with a static or entity-aware replacement. */
 export interface RedactOptions extends PIISelectionOptions {
   /** Static replacement or a replacement function. Defaults to `"[REDACTED]"`. */
   replacement?: string | ((entity: PIIEntity) => string);
 }
 
+/** Options for the LRU cache on {@link createPiiMasker}. */
 export interface PiiMaskerCacheOptions {
   /**
    * Bound for the LRU cache of already-transformed strings. Logging workloads
@@ -31,10 +45,12 @@ export interface PiiMaskerCacheOptions {
   cacheSize?: number;
 }
 
+/** Configuration for {@link createPiiMasker}. Defaults to mask mode with caching enabled. */
 export type PiiMaskerOptions =
   | ({ mode?: "mask" } & MaskOptions & PiiMaskerCacheOptions)
   | ({ mode: "redact" } & RedactOptions & PiiMaskerCacheOptions);
 
+/** Reusable protector created by {@link createPiiMasker}. */
 export interface PiiMasker {
   /** Protect PII in one string. */
   text(input: string): string;
@@ -64,7 +80,7 @@ const replaceEntities = (
 
   let result = input;
   let boundary = input.length;
-  const ordered = entities.toSorted(
+  const ordered = [...entities].sort(
     (left, right) => right.start - left.start || right.end - left.end,
   );
 

@@ -1,5 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@latest/schema.json",
   "entry": ["src/index.ts", "src/pino.ts", "src/winston.ts"],
-  "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+  "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "ignore": ["test/deno-smoke.ts"]
 }

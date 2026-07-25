@@ -37,3 +37,17 @@ jobs:
 
       - name: Audit dependencies
         run: bun audit --audit-level high
+
+  deno:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run Deno smoke tests
+        run: deno test --allow-read test/deno-smoke.ts

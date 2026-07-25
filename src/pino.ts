@@ -1,6 +1,16 @@
+/**
+ * Pino integration for automatic PII masking.
+ *
+ * Wraps Pino's `logMethod` hook to transform every argument before
+ * serialization. The masker operates on the raw values, so structured
+ * fields and message strings are both protected.
+ *
+ * @module
+ */
 import type { LoggerOptions } from "pino";
 import { createPiiMasker, type PiiMaskerOptions } from "./index.js";
 
+/** Options accepted by {@link pinoPiiMasking}. Same as {@link PiiMaskerOptions}. */
 export type PinoPiiMaskingOptions = PiiMaskerOptions;
 
 /**
