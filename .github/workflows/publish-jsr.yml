@@ -2,46 +2,16 @@ name: Publish JSR
 
 on:
   push:
-    tags:
-      - "v*"
-
-permissions:
-  contents: read
-  id-token: write
-
-concurrency:
-  group: publish-jsr-${{ github.ref }}
-  cancel-in-progress: false
+    branches:
+      - main
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-
-      - name: Verify release version
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must be a stable semantic version, received '${tag}'."
-            exit 1
-          fi
-          jsr_version="$(node -e "console.log(require('./jsr.json').version)")"
-          if [[ "${tag}" != "v${jsr_version}" ]]; then
-            echo "Tag '${tag}' does not match JSR version '${jsr_version}'."
-            exit 1
-          fi
-
-      - name: Dry run
-        run: npx jsr publish --dry-run
-
-      - name: Publish to JSR
+      - uses: actions/checkout@v7
+      - name: Publish package
         run: npx jsr publish
