@@ -1,4 +1,4 @@
-import { format } from "winston";
+import { format, type Format } from "winston";
 import { createPiiMasker, type PiiMaskerOptions } from "./index.js";
 
 export type WinstonPiiMaskingOptions = PiiMaskerOptions;
@@ -17,7 +17,7 @@ export type WinstonPiiMaskingOptions = PiiMaskerOptions;
  * });
  * ```
  */
-export const winstonPiiMasking = (options: WinstonPiiMaskingOptions = {}) => {
+export const winstonPiiMasking = (options: WinstonPiiMaskingOptions = {}): Format => {
   const masker = createPiiMasker(options);
   return format((info) => masker.value(info))();
 };

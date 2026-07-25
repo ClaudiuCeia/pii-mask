@@ -1,0 +1,13 @@
+{
+  "name": "@claudiu-ceia/pii-mask",
+  "version": "0.1.1",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pino": "./src/pino.ts",
+    "./winston": "./src/winston.ts"
+  },
+  "publish": {
+    "include": ["src/**/*.ts", "LICENSE", "README.md"]
+  }
+}
