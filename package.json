@@ -1,6 +1,6 @@
 {
   "name": "@claudiu-ceia/pii-mask",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic PII masking and redaction for TypeScript applications and logs.",
   "keywords": [
     "masking",
