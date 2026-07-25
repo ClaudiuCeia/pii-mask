@@ -20,13 +20,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout baseline
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
 
       - name: Checkout candidate
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: candidate
 
