@@ -5,7 +5,7 @@
     "": {
       "name": "@claudiu-ceia/pii-mask",
       "dependencies": {
-        "@claudiu-ceia/ts-duckling": "^0.6.1",
+        "@claudiu-ceia/ts-duckling": "^0.6.2",
       },
       "devDependencies": {
         "@types/bun": "^1.4.0",
@@ -28,7 +28,7 @@
     },
   },
   "packages": {
-    "@claudiu-ceia/ts-duckling": ["@claudiu-ceia/ts-duckling@0.6.1", "", {}, "sha512-gZRQC6Tmx83Cc0klWOm48+hDBQycO8DVJWmpvjFqGPZPtY3ZHox7AjCDBHeps/cx40e86yn+rngFsUy72UWbgw=="],
+    "@claudiu-ceia/ts-duckling": ["@claudiu-ceia/ts-duckling@0.6.2", "", {}, "sha512-8xUVZO2SDBDTQSWqzTk7V06XgkHU6rg+tGIQIUWQ8M8JipZJVMQ82tZfjESc8k5DmWDaqwFfNBb686D64HeVkA=="],
 
     "@colors/colors": ["@colors/colors@1.6.0", "", {}, "sha512-Ir+AOibqzrIsL6ajt3Rz3LskB7OiMVHqltZmspbW/TJuTVuyOMirVqAkjfY6JISiLHgyNqicAC8AyHHGzNd/dA=="],
 
