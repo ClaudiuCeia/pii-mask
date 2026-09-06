@@ -34,8 +34,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify npm publish lifecycle
-        run: npm publish --dry-run --access public
+      - name: Run quality and npm package checks
+        run: bun run prepublishOnly
 
       - name: Audit dependencies
         run: bun audit --audit-level high
