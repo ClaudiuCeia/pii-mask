@@ -1,10 +1,45 @@
 import assert from "node:assert/strict";
 
-import { maskText, redactText } from "../dist/index.js";
-import { pinoPiiMasking } from "../dist/pino.js";
-import { winstonPiiMasking } from "../dist/winston.js";
+import { maskText, redactText } from "@claudiu-ceia/pii-mask";
+
+const modes = new Set(process.argv.slice(2));
 
 assert.equal(maskText("Email jane@example.com"), "Email ****************");
 assert.equal(redactText("IP 192.168.0.1"), "IP [REDACTED]");
-assert.equal(typeof pinoPiiMasking().hooks?.logMethod, "function");
-assert.equal(typeof winstonPiiMasking().transform, "function");
+
+if (modes.has("pino")) {
+  const [{ default: pino }, { pinoPiiMasking }] = await Promise.all([
+    import("pino"),
+    import("@claudiu-ceia/pii-mask/pino"),
+  ]);
+  const lines = [];
+  const logger = pino(
+    { ...pinoPiiMasking({ mode: "redact" }), base: null, timestamp: false },
+    { write: (line) => lines.push(line) },
+  );
+  logger.info({ email: "jane@example.com" }, "Request from 192.168.0.1");
+  assert.deepEqual(JSON.parse(lines[0]), {
+    level: 30,
+    email: "[REDACTED]",
+    msg: "Request from [REDACTED]",
+  });
+}
+
+if (modes.has("winston")) {
+  const [{ default: winston }, { winstonPiiMasking }] = await Promise.all([
+    import("winston"),
+    import("@claudiu-ceia/pii-mask/winston"),
+  ]);
+  const entries = [];
+  const capture = winston.format((info) => {
+    entries.push(info);
+    return info;
+  });
+  const logger = winston.createLogger({
+    format: winston.format.combine(winstonPiiMasking({ mode: "redact" }), capture()),
+    transports: [new winston.transports.Console({ silent: true })],
+  });
+  logger.info("Email jane@example.com", { ip: "192.168.0.1" });
+  assert.equal(entries[0].message, "Email [REDACTED]");
+  assert.equal(entries[0].ip, "[REDACTED]");
+}

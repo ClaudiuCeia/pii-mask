@@ -1,0 +1,35 @@
+{
+  "name": "@claudiu-ceia/pii-mask",
+  "version": "0.2.0",
+  "license": "MIT",
+  "nodeModulesDir": "none",
+  "minimumDependencyAge": {
+    "exclude": ["jsr:@claudiu-ceia/combine", "jsr:@claudiu-ceia/ts-duckling"]
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./pino": "./src/pino.ts",
+    "./winston": "./src/winston.ts"
+  },
+  "publish": {
+    "exclude": [
+      ".benchmarks/",
+      ".github/",
+      ".oxfmtrc.json",
+      "bun.lock",
+      "deno.lock",
+      "dist/",
+      "knip.json",
+      "package.json",
+      "scripts/",
+      "test/",
+      "tsconfig.build.json",
+      "tsconfig.json"
+    ]
+  },
+  "imports": {
+    "@claudiu-ceia/ts-duckling": "jsr:@claudiu-ceia/ts-duckling@0.7.2",
+    "pino": "npm:pino@10.3.1",
+    "winston": "npm:winston@3.19.0"
+  }
+}
