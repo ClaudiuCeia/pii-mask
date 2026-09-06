@@ -38,9 +38,9 @@ export interface RedactOptions extends PIISelectionOptions {
 /** Options for the LRU cache on {@link createPiiMasker}. */
 export interface PiiMaskerCacheOptions {
   /**
-   * Bound for the LRU cache of already-transformed strings. Logging workloads
-   * repeat the same strings constantly, so caching makes them nearly free.
-   * Set to `0` to disable. Defaults to `1024`.
+   * Bound for the LRU cache of already-transformed strings. Each entry retains
+   * the original input string and its transformed result. Set to `0` to
+   * disable. Defaults to `1024`.
    */
   cacheSize?: number;
 }

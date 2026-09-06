@@ -1,12 +1,16 @@
-import type { BenchmarkReport, BenchmarkResult } from "./benchmark.js";
+import {
+  parseBenchmarkReport,
+  type BenchmarkReport,
+  type BenchmarkResult,
+} from "./benchmark-report.js";
 
-interface Comparison {
+type Comparison = Readonly<{
   name: string;
   baseline: number;
   candidate: number;
   changePercent: number;
   regressed: boolean;
-}
+}>;
 
 const [baselinePath, candidatePath, thresholdArgument] = Bun.argv.slice(2);
 if (baselinePath === undefined || candidatePath === undefined) {
@@ -22,16 +26,20 @@ if (!Number.isFinite(thresholdPercent) || thresholdPercent < 0) {
   throw new RangeError("Benchmark threshold must be a non-negative number");
 }
 
-const readReport = async (path: string): Promise<BenchmarkReport> => {
-  const report = (await Bun.file(path).json()) as BenchmarkReport;
-  if (report.version !== 1 || !Array.isArray(report.results)) {
-    throw new Error(`Unsupported benchmark report: ${path}`);
-  }
-  return report;
-};
+const readReport = async (path: string): Promise<BenchmarkReport> =>
+  parseBenchmarkReport(await Bun.file(path).json(), path);
 
 const baseline = await readReport(baselinePath);
 const candidate = await readReport(candidatePath);
+if (
+  baseline.runtime !== candidate.runtime ||
+  baseline.platform !== candidate.platform ||
+  baseline.architecture !== candidate.architecture
+) {
+  throw new Error(
+    `Benchmark environments do not match: ${baseline.runtime} ${baseline.platform}/${baseline.architecture} != ${candidate.runtime} ${candidate.platform}/${candidate.architecture}`,
+  );
+}
 const baselineByName = new Map<string, BenchmarkResult>(
   baseline.results.map((result) => [result.name, result]),
 );
@@ -40,8 +48,8 @@ const baselineByName = new Map<string, BenchmarkResult>(
 // measure third-party code and are skipped by the regression gate.
 const isReference = (name: string): boolean => name.endsWith("/plain");
 
-// Sub-microsecond medians are dominated by noise; require a minimum absolute
-// slowdown before a relative regression counts.
+// Sub-microsecond medians are dominated by noise, so we require a minimum
+// absolute slowdown before a relative regression counts.
 const ABSOLUTE_FLOOR_NANOSECONDS = 1_000;
 
 const comparisons: Comparison[] = candidate.results
@@ -52,19 +60,17 @@ const comparisons: Comparison[] = candidate.results
       throw new Error(`Benchmark is missing from baseline: ${result.name}`);
     }
 
-    // Gate on minimum time: for CPU-bound work, noise only adds time, so the
-    // minimum is the most repeatable signal. Medians remain in the report.
-    const baselineBest = previous.minimumNanoseconds;
-    const candidateBest = result.minimumNanoseconds;
-    const changePercent = ((candidateBest - baselineBest) / baselineBest) * 100;
+    const baselineMedian = previous.medianNanoseconds;
+    const candidateMedian = result.medianNanoseconds;
+    const changePercent = ((candidateMedian - baselineMedian) / baselineMedian) * 100;
     return {
       name: result.name,
-      baseline: baselineBest,
-      candidate: candidateBest,
+      baseline: baselineMedian,
+      candidate: candidateMedian,
       changePercent,
       regressed:
         changePercent > thresholdPercent &&
-        candidateBest - baselineBest > ABSOLUTE_FLOOR_NANOSECONDS,
+        candidateMedian - baselineMedian > ABSOLUTE_FLOOR_NANOSECONDS,
     };
   });
 
@@ -92,9 +98,9 @@ const rows = comparisons.map((comparison) =>
 );
 
 const summary = [
-  `Performance regression threshold: ${thresholdPercent}% on minimum time/op (1 us absolute floor; */plain reference scenarios excluded)`,
+  `Performance regression threshold: ${thresholdPercent}% on median time/op (1 us absolute floor; */plain reference scenarios excluded)`,
   "",
-  "Benchmark | Baseline (min) | Candidate (min) | Change | Status",
+  "Benchmark | Baseline (median) | Candidate (median) | Change | Status",
   "--- | ---: | ---: | ---: | :---:",
   ...rows,
 ].join("\n");

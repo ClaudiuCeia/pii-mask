@@ -1,128 +1,19 @@
 # @claudiu-ceia/pii-mask
 
-Deterministic PII masking and redaction for TypeScript applications and logs on Bun, Deno, and Node.js.
+Detect and redact common PII formats in TypeScript backend logs before they leave your process.
 
 [![CI](https://github.com/ClaudiuCeia/pii-mask/actions/workflows/ci.yml/badge.svg)](https://github.com/ClaudiuCeia/pii-mask/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@claudiu-ceia/pii-mask.svg)](https://www.npmjs.com/package/@claudiu-ceia/pii-mask)
-[![jsr](https://jsr.io/badges/@claudiu-ceia/pii-mask.svg)](https://jsr.io/@claudiu-ceia/pii-mask)
-[![license](https://img.shields.io/npm/l/@claudiu-ceia/pii-mask?style=flat-square&label=license)](LICENSE)
+[![JSR](https://jsr.io/badges/@claudiu-ceia/pii-mask.svg)](https://jsr.io/@claudiu-ceia/pii-mask)
+[![license](https://img.shields.io/npm/l/@claudiu-ceia/pii-mask.svg)](./LICENSE)
 
-`pii-mask` uses [`@claudiu-ceia/ts-duckling`](https://github.com/ClaudiuCeia/ts-duckling) directly for local, grammar-based PII detection. It adds masking and redaction policies, immutable structured-value traversal, and opt-in plugins for Pino and Winston. There are no network calls and no logger monkeypatching.
+`pii-mask` detects 12 common PII formats inside messages and nested values, then returns a redacted or masked copy without mutating the input. Detection runs synchronously in your process, makes no network calls, and integrates with Pino and Winston without patching either logger.
 
-## Install
-
-### Bun
+## Quick Start
 
 ```sh
-bun add @claudiu-ceia/pii-mask
+bun add @claudiu-ceia/pii-mask pino
 ```
-
-### Deno
-
-```sh
-deno add jsr:@claudiu-ceia/pii-mask@^0.2.0
-```
-
-Deno 2.9's default dependency-age policy may defer a release published within the last 24 hours.
-Current Deno versions can bypass it by adding `--min-dep-age=0` to the install command. On Deno
-2.9.0, wait for the policy window or temporarily add `jsr:@claudiu-ceia/pii-mask`,
-`jsr:@claudiu-ceia/ts-duckling`, and `jsr:@claudiu-ceia/combine` to
-`minimumDependencyAge.exclude` in `deno.json`.
-
-### Node.js
-
-```sh
-npm install @claudiu-ceia/pii-mask
-```
-
-Install the optional peer for the logger adapter you use:
-
-```sh
-bun add pino # or winston
-npm install pino # or winston
-deno add npm:pino@^10 # or npm:winston@^3.3
-```
-
-The package is ESM-only. It supports Bun 1.3+, Deno 2.9+, and Node.js 24+.
-
-## Text
-
-```ts
-import { findPii, maskText, redactText } from "@claudiu-ceia/pii-mask";
-
-maskText("Email jane@example.com");
-// "Email ****************"
-
-maskText("Card 4242 4242 4242 4242", {
-  keepStart: 4,
-  keepEnd: 4,
-});
-// "Card 4242***********4242"
-
-redactText("Email jane@example.com from 192.168.0.1");
-// "Email [REDACTED] from [REDACTED]"
-
-redactText("Email jane@example.com", {
-  replacement: ({ kind }) => `[REDACTED:${kind}]`,
-});
-// "Email [REDACTED:email]"
-
-findPii("Email jane@example.com");
-// [{ kind: "email", start: 6, end: 22, text: "jane@example.com", ... }]
-```
-
-Use `kinds` to transform only selected PII kinds:
-
-```ts
-maskText("jane@example.com from 192.168.0.1", {
-  kinds: ["email"],
-});
-// "**************** from 192.168.0.1"
-```
-
-The supported kinds come from `ts-duckling`'s `PIIParsers`: `email`, `phone`, `ip`, `ssn`, `credit_card`, `uuid`, `api_key`, `iban`, `mac_address`, `jwt`, `crypto_address`, and `bic`.
-
-## Structured Values
-
-`maskValue` and `redactValue` recursively protect strings in arrays, plain objects, and errors. They return a copy and do not mutate the input.
-
-```ts
-import { maskValue, redactValue } from "@claudiu-ceia/pii-mask";
-
-const safe = maskValue({
-  message: "Contact jane@example.com",
-  context: { ip: "192.168.0.1" },
-});
-
-// {
-//   message: "Contact ****************",
-//   context: { ip: "***********" },
-// }
-
-redactValue(new Error("Request from 192.168.0.1"));
-// Error: Request from [REDACTED]
-```
-
-Dates, buffers, maps, sets, and other class instances are retained as-is. Cycles in transformed values are preserved.
-
-For repeated use, create one configured protector:
-
-```ts
-import { createPiiMasker } from "@claudiu-ceia/pii-mask";
-
-const protector = createPiiMasker({
-  mode: "redact",
-  replacement: ({ kind }) => `<${kind}>`,
-});
-
-protector.text("Email jane@example.com");
-protector.value({ email: "jane@example.com" });
-```
-
-## Pino
-
-The Pino plugin returns a normal `hooks.logMethod` configuration. It protects arguments before Pino serializes them.
-Pino applications running under Deno also need `--allow-sys=hostname`, which Pino uses for its default bindings.
 
 ```ts
 import pino from "pino";
@@ -135,14 +26,103 @@ const logger = pino(
   }),
 );
 
-logger.info({ email: "jane@example.com" }, "User from 192.168.0.1");
+logger.info(
+  {
+    user: { email: "person@example.com" },
+    card: "4111 1111 1111 1111",
+  },
+  "Request from 192.168.1.20",
+);
+
+// user.email -> "[PII]"
+// card       -> "[PII]"
+// message    -> "Request from [PII]"
 ```
 
-If you already use a `logMethod` hook, compose its behavior explicitly; Pino accepts one hook at that position.
+The same matcher can protect values before they reach any logger or storage boundary:
+
+```ts
+import { redactValue } from "@claudiu-ceia/pii-mask";
+
+const event = {
+  message: "Contact person@example.com",
+  client: { ip: "192.168.1.20" },
+};
+
+const safeEvent = redactValue(event, { replacement: "[PII]" });
+
+console.log(safeEvent);
+// {
+//   message: "Contact [PII]",
+//   client: { ip: "[PII]" },
+// }
+
+console.log(event.client.ip);
+// "192.168.1.20"; the input was not mutated
+```
+
+## Why pii-mask
+
+- Protects free-form messages and nested structured values, not only known object paths.
+- Provides redaction and character masking through one detector set.
+- Preserves cycles and clones supported arrays, plain objects, and `Error` values.
+- Includes a standard Pino hook and a Winston format.
+- Uses configurable PII kinds and a bounded LRU cache.
+- Supports Bun 1.3+, Deno 2.9+, and Node.js 24+ from one ESM package.
+
+## Detected PII
+
+| Kind                   | Examples                        |
+| ---------------------- | ------------------------------- |
+| Identity               | Email, phone, SSN               |
+| Network and device     | IPv4, IPv6, MAC address, UUID   |
+| Payment and banking    | Credit card, IBAN, BIC          |
+| Credentials and tokens | JWT, API key                    |
+| Blockchain             | Common cryptocurrency addresses |
+
+The corresponding API kinds are `email`, `phone`, `ip`, `ssn`, `credit_card`, `uuid`, `api_key`, `iban`, `mac_address`, `jwt`, `crypto_address`, and `bic`.
+
+Detection is pattern-based and best-effort. See [Security](#security) before using it at a sensitive boundary.
+
+## Installation
+
+```sh
+# Bun
+bun add @claudiu-ceia/pii-mask
+
+# npm
+npm install @claudiu-ceia/pii-mask
+
+# Deno and JSR-aware tooling
+deno add jsr:@claudiu-ceia/pii-mask@^0.2.0
+```
+
+Install `pino` or `winston` as an optional peer when using its adapter. Pino applications running under Deno also need `--allow-sys=hostname`, which Pino uses for its default bindings.
+
+Deno 2.9's default dependency-age policy may defer a release published within the last 24 hours. Current Deno versions can bypass it with `--min-dep-age=0`. On Deno 2.9.0, wait for the policy window or temporarily exclude this package and its JSR dependencies from `minimumDependencyAge`.
+
+The package is ESM-only. The npm artifact includes JavaScript and type declarations; JSR consumers use the TypeScript source.
+
+## Pino
+
+The Pino adapter returns a standard `hooks.logMethod` configuration. It transforms log arguments before Pino serializes them.
+
+```ts
+import pino from "pino";
+import { pinoPiiMasking } from "@claudiu-ceia/pii-mask/pino";
+
+const logger = pino({
+  level: "info",
+  redact: ["req.headers.authorization", "user.internalId"],
+  ...pinoPiiMasking({ mode: "redact" }),
+});
+```
+
+Use Pino's path-based `redact` option alongside `pii-mask` for fields you always consider sensitive, even when their value does not match a supported PII format. If you already use a `logMethod` hook, compose the behaviors explicitly because Pino accepts one hook at that position.
 
 ## Winston
 
-The Winston plugin is a regular format. Put it before finalizing formats such as `json()` and `simple()`.
+The Winston adapter is a regular format. Put it before finalizing formats such as `json()` and `simple()`.
 
 ```ts
 import winston from "winston";
@@ -154,92 +134,72 @@ const logger = winston.createLogger({
 });
 ```
 
-## API
+## Core API
 
-- `findPii(input)` returns the detected `PIIEntity[]` spans.
-- `maskText(input, options?)` repeats a mask token across detected spans.
-- `redactText(input, options?)` replaces each detected span once.
-- `maskValue(input, options?)` immutably masks nested string values.
-- `redactValue(input, options?)` immutably redacts nested string values.
-- `createPiiMasker(options?)` creates reusable `text` and `value` operations.
-- `pinoPiiMasking(options?)` is exported from `@claudiu-ceia/pii-mask/pino`.
-- `winstonPiiMasking(options?)` is exported from `@claudiu-ceia/pii-mask/winston`.
+```ts
+import {
+  createPiiMasker,
+  findPii,
+  maskText,
+  maskValue,
+  redactText,
+  redactValue,
+} from "@claudiu-ceia/pii-mask";
+
+findPii("Email person@example.com");
+// [{ kind: "email", text: "person@example.com", start: 6, end: 24, ... }]
+
+redactText("Email person@example.com");
+// "Email [REDACTED]"
+
+maskText("Card 4111 1111 1111 1111", { keepStart: 4, keepEnd: 4 });
+// "Card 4111***********1111"
+
+maskValue({ email: "person@example.com" });
+redactValue({ ip: "192.168.1.20" });
+
+const protector = createPiiMasker({
+  mode: "redact",
+  replacement: ({ kind }) => `[${kind}]`,
+  kinds: ["email", "ip", "jwt"],
+  cacheSize: 2_048,
+});
+
+protector.text("Email person@example.com");
+protector.value({ ip: "192.168.1.20" });
+```
+
+`maskValue` and `redactValue` recursively transform string values in arrays, plain objects, and errors. They preserve cycles and return a copy without mutating the input. Dates, buffers, maps, sets, and other class instances are retained as-is.
+
+The optional cache is local to each protector. Every LRU entry retains the original input string as its key and the transformed string as its value. Set `cacheSize: 0` for short-lived sensitive values or environments where this retention is undesirable.
 
 ## Performance
 
-`createPiiMasker` (and therefore both logger plugins) keeps a bounded LRU cache of transformed strings — 1,024 entries by default. Logging traffic repeats routes, messages, and metadata constantly, so cached strings cost almost nothing. Tune or disable it with `cacheSize`:
-
-```ts
-createPiiMasker({ cacheSize: 4096 }); // larger cache
-createPiiMasker({ cacheSize: 0 }); // disabled, every string is re-scanned
-```
-
-Measured overhead of the Pino hook over plain Pino (Bun 1.3, median of 13 samples):
-
-| Scenario                                     |   Plain | Protected |           Added |
-| -------------------------------------------- | ------: | --------: | --------------: |
-| Small log object                             | ~0.8 µs |   ~1.4 µs |         ~0.6 µs |
-| Realistic HTTP log (repeated strings)        | ~1.3 µs |   ~3.5 µs |           ~2 µs |
-| Realistic HTTP log (unique PII per call)     |   ~1 µs |    ~21 µs |          ~20 µs |
-| 700 KB batch payload, 10k unique PII strings | ~180 µs |   ~320 ms | detection-bound |
-
-Grammar-based detection costs scale with the number of unique PII-like strings. Very large one-off payloads are the worst case; prefer logging such payloads selectively or scoping `kinds` to what you actually need to hide.
-
-Pull requests run the full benchmark suite — including all logger scenarios — against the base commit and fail on regressions over 15%.
-
-## Security Notes
-
-PII detection is grammar-based. It can produce false positives and false negatives, especially for ambiguous numeric identifiers and domain-specific secrets. Test it against representative data and use logger-native key redaction alongside this package when fields are known to be sensitive.
-
-Only string values are inspected. Object keys and arbitrary class instances are not transformed. Avoid logging raw secrets that no configured parser can recognize.
-
-## Development
-
-Bun owns the development toolchain:
-
-```sh
-bun install
-bun run check
-bun run build
-bun run package:check
-```
-
-`bun run check` runs Oxfmt, Oxlint, TypeScript, the Bun test suite, and Knip.
-Deno is required locally only to validate the JSR package with
-`deno publish --dry-run --allow-dirty`. Releases are published exclusively by pushing a matching
-version tag, which preserves trusted-publishing provenance for both registries.
-
-`bun run package:check` validates the package metadata, installs the packed artifact with both
-Bun and npm, checks isolated optional-peer configurations and lower bounds, typechecks consumers,
-and runs it with Bun and Node.
-
-Install the optional pre-commit hook with `bun run hooks:install`.
-
-### Benchmarks
-
-Run the benchmark suite locally:
+The benchmark suite uses [Mitata](https://github.com/evanwashere/mitata) and covers direct detection, string transformation, nested values from small to large, and Pino hook overhead. CI compares median time for the candidate and base builds, then fails protected benchmark regressions above 15% with a 1 microsecond absolute floor.
 
 ```sh
 bun run bench
 ```
 
-Save a local baseline, make a change, then compare against it:
+Detection cost scales with unique input strings and payload size. Very large one-off payloads are the worst case, so log them selectively. Run the suite in your deployment environment when performance is part of the decision.
 
-```sh
-bun run bench:save
-bun run bench:check
-```
+## Security
 
-`bench:check` gates non-reference scenarios on minimum time per operation. It fails when a result
-regresses by more than 15% and by more than the 1 µs absolute noise floor. Pass a different
-percentage threshold directly to the comparator when needed:
+Pattern matching reduces accidental PII exposure. It does not prove that data is safe or that a system complies with a privacy standard.
 
-```sh
-bun run bench:compare -- .benchmarks/baseline.json .benchmarks/current.json 10
-```
+- False negatives and false positives are possible.
+- Object keys are not inspected or transformed.
+- Unknown and domain-specific identifiers require separate rules.
+- Non-string scalar values are not transformed.
+- The optional cache retains original and transformed strings in memory.
+- Logger output can still expose data through serializers, transports, or values added after the adapter runs.
 
-Pull requests run the same suite against the base and candidate commits on one GitHub runner. The `BENCHMARK_THRESHOLD_PERCENT` value in `.github/workflows/ci.yml` controls the CI budget.
+Combine value detection with allowlists, known-path redaction, access controls, retention limits, and tests built from your own data formats. Report vulnerabilities privately through [GitHub security advisories](https://github.com/ClaudiuCeia/pii-mask/security/advisories/new); see the [security policy](https://github.com/ClaudiuCeia/pii-mask/blob/main/SECURITY.md) for details.
+
+## Development
+
+See the [contribution guide](https://github.com/ClaudiuCeia/pii-mask/blob/main/CONTRIBUTING.md) for setup, validation, and benchmark workflows.
 
 ## License
 
-MIT © [Claudiu Ceia](https://github.com/ClaudiuCeia)
+[MIT](./LICENSE) © [Claudiu Ceia](https://github.com/ClaudiuCeia)
