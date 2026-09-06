@@ -231,8 +231,8 @@ jobs:
           VERSION: ${{ env.RELEASE_TAG }}
         run: |
           version="${VERSION#v}"
-          for attempt in 1 2 3 4 5 6; do
-            echo "npm provenance verification attempt ${attempt}/6"
+          for attempt in {1..18}; do
+            echo "npm provenance verification attempt ${attempt}/18"
             if bun scripts/verify-published-version.ts npm "${version}" "${GITHUB_SHA}" "${GITHUB_REF}" --require; then
               exit 0
             fi
@@ -260,7 +260,19 @@ jobs:
           resolved="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
           test "${resolved}" = "$(git rev-parse HEAD)"
 
+      - name: Check whether GitHub release exists
+        id: github_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Create GitHub release
+        if: steps.github_release.outputs.exists != 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           generate_release_notes: true
