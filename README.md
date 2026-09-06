@@ -1,6 +1,6 @@
 # @claudiu-ceia/pii-mask
 
-Deterministic PII masking and redaction for TypeScript applications and logs.
+Deterministic PII masking and redaction for TypeScript applications and logs on Bun, Deno, and Node.js.
 
 [![CI](https://github.com/ClaudiuCeia/pii-mask/actions/workflows/ci.yml/badge.svg)](https://github.com/ClaudiuCeia/pii-mask/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@claudiu-ceia/pii-mask.svg)](https://www.npmjs.com/package/@claudiu-ceia/pii-mask)
@@ -11,19 +11,39 @@ Deterministic PII masking and redaction for TypeScript applications and logs.
 
 ## Install
 
+### Bun
+
 ```sh
 bun add @claudiu-ceia/pii-mask
+```
+
+### Deno
+
+```sh
+deno add jsr:@claudiu-ceia/pii-mask@^0.2.0
+```
+
+Deno 2.9's default dependency-age policy may defer a release published within the last 24 hours.
+Current Deno versions can bypass it by adding `--min-dep-age=0` to the install command. On Deno
+2.9.0, wait for the policy window or temporarily add `jsr:@claudiu-ceia/pii-mask`,
+`jsr:@claudiu-ceia/ts-duckling`, and `jsr:@claudiu-ceia/combine` to
+`minimumDependencyAge.exclude` in `deno.json`.
+
+### Node.js
+
+```sh
+npm install @claudiu-ceia/pii-mask
 ```
 
 Install the optional peer for the logger adapter you use:
 
 ```sh
-bun add pino
-# or
-bun add winston
+bun add pino # or winston
+npm install pino # or winston
+deno add npm:pino@^10 # or npm:winston@^3.3
 ```
 
-The package is ESM-only. It supports Bun 1.3+ and Node.js 20+.
+The package is ESM-only. It supports Bun 1.3+, Deno 2.9+, and Node.js 24+.
 
 ## Text
 
@@ -102,6 +122,7 @@ protector.value({ email: "jane@example.com" });
 ## Pino
 
 The Pino plugin returns a normal `hooks.logMethod` configuration. It protects arguments before Pino serializes them.
+Pino applications running under Deno also need `--allow-sys=hostname`, which Pino uses for its default bindings.
 
 ```ts
 import pino from "pino";
@@ -153,7 +174,7 @@ createPiiMasker({ cacheSize: 4096 }); // larger cache
 createPiiMasker({ cacheSize: 0 }); // disabled, every string is re-scanned
 ```
 
-Measured overhead of the Pino hook over plain Pino (Bun 1.3, median of 21 samples):
+Measured overhead of the Pino hook over plain Pino (Bun 1.3, median of 13 samples):
 
 | Scenario                                     |   Plain | Protected |           Added |
 | -------------------------------------------- | ------: | --------: | --------------: |
@@ -174,13 +195,25 @@ Only string values are inspected. Object keys and arbitrary class instances are 
 
 ## Development
 
+Bun owns the development toolchain:
+
 ```sh
 bun install
 bun run check
+bun run build
 bun run package:check
 ```
 
-The project uses Bun, TypeScript 7, Oxfmt, Oxlint, Knip, Publint, and Bun's test runner.
+`bun run check` runs Oxfmt, Oxlint, TypeScript, the Bun test suite, and Knip.
+Deno is required locally only to validate the JSR package with
+`deno publish --dry-run --allow-dirty`. Releases are published exclusively by pushing a matching
+version tag, which preserves trusted-publishing provenance for both registries.
+
+`bun run package:check` validates the package metadata, installs the packed artifact with both
+Bun and npm, checks isolated optional-peer configurations and lower bounds, typechecks consumers,
+and runs it with Bun and Node.
+
+Install the optional pre-commit hook with `bun run hooks:install`.
 
 ### Benchmarks
 
@@ -197,13 +230,15 @@ bun run bench:save
 bun run bench:check
 ```
 
-`bench:check` fails when any median time per operation regresses by more than 15%. Pass a different threshold directly to the comparator when needed:
+`bench:check` gates non-reference scenarios on minimum time per operation. It fails when a result
+regresses by more than 15% and by more than the 1 µs absolute noise floor. Pass a different
+percentage threshold directly to the comparator when needed:
 
 ```sh
 bun run bench:compare -- .benchmarks/baseline.json .benchmarks/current.json 10
 ```
 
-Pull requests run the same suite against the base and candidate commits on one GitHub runner. The `BENCHMARK_THRESHOLD_PERCENT` value in `.github/workflows/performance.yml` controls the CI budget.
+Pull requests run the same suite against the base and candidate commits on one GitHub runner. The `BENCHMARK_THRESHOLD_PERCENT` value in `.github/workflows/ci.yml` controls the CI budget.
 
 ## License
 

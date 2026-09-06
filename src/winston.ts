@@ -6,7 +6,7 @@
  *
  * @module
  */
-import { format, type Logform } from "winston";
+import winston, { type Logform } from "winston";
 import { createPiiMasker, type PiiMaskerOptions } from "./index.js";
 
 /** Options accepted by {@link winstonPiiMasking}. Same as {@link PiiMaskerOptions}. */
@@ -28,5 +28,5 @@ export type WinstonPiiMaskingOptions = PiiMaskerOptions;
  */
 export const winstonPiiMasking = (options: WinstonPiiMaskingOptions = {}): Logform.Format => {
   const masker = createPiiMasker(options);
-  return format((info) => masker.value(info))();
+  return winston.format((info) => masker.value(info))();
 };
