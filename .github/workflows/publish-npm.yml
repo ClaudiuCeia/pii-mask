@@ -4,9 +4,18 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to resume
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -18,6 +27,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -41,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Tag '${tag}' is not a stable semantic version."
             exit 1
@@ -79,6 +90,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Checkout recovery verification script
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            scripts/jsr-consumer-deno.json
+            scripts/jsr-consumer-smoke.ts
+          sparse-checkout-cone-mode: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -97,17 +121,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --force origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          resolved="$(git rev-list -n 1 "refs/tags/${GITHUB_REF_NAME}")"
-          test "${resolved}" = "${GITHUB_SHA}"
+          git fetch --force origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          resolved="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          test "${resolved}" = "$(git rev-parse HEAD)"
 
       - name: Check whether JSR version exists
         id: jsr_version
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           version="${VERSION#v}"
-          bun scripts/verify-published-version.ts jsr "${version}" "${GITHUB_SHA}" "${GITHUB_REF}"
+          release_sha="$(git rev-parse HEAD)"
+          bun scripts/verify-published-version.ts jsr "${version}" "${release_sha}" "refs/tags/${VERSION}"
 
       - name: Publish to JSR
         if: steps.jsr_version.outputs.exists != 'true'
@@ -115,12 +140,13 @@ jobs:
 
       - name: Verify published JSR provenance
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           version="${VERSION#v}"
-          for attempt in 1 2 3 4 5 6; do
-            echo "JSR provenance verification attempt ${attempt}/6"
-            if bun scripts/verify-published-version.ts jsr "${version}" "${GITHUB_SHA}" "${GITHUB_REF}" --require; then
+          release_sha="$(git rev-parse HEAD)"
+          for attempt in {1..18}; do
+            echo "JSR provenance verification attempt ${attempt}/18"
+            if bun scripts/verify-published-version.ts jsr "${version}" "${release_sha}" "refs/tags/${VERSION}" --require; then
               exit 0
             fi
             sleep 10
@@ -129,12 +155,18 @@ jobs:
 
       - name: Verify published JSR package runtime
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           version="${VERSION#v}"
+          script_dir="scripts"
+          script="scripts/jsr-consumer-smoke.ts"
+          if [[ -f .release-workflow/scripts/jsr-consumer-smoke.ts ]]; then
+            script_dir=".release-workflow/scripts"
+            script=".release-workflow/scripts/jsr-consumer-smoke.ts"
+          fi
           for attempt in 1 2 3 4 5 6; do
             echo "JSR runtime verification attempt ${attempt}/6"
-            if deno run --allow-env --allow-sys=hostname --no-lock --min-dep-age=0 scripts/jsr-consumer-smoke.ts "${version}"; then
+            if deno run --config "${script_dir}/jsr-consumer-deno.json" --allow-env --allow-sys=hostname --no-lock --min-dep-age=0 "${script}" "${version}"; then
               exit 0
             fi
             sleep 10
@@ -151,6 +183,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || env.RELEASE_TAG }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -170,14 +204,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --force origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          resolved="$(git rev-list -n 1 "refs/tags/${GITHUB_REF_NAME}")"
-          test "${resolved}" = "${GITHUB_SHA}"
+          git fetch --force origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          resolved="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          if [[ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]]; then
+            git diff --exit-code "${resolved}" HEAD -- . \
+              ':(exclude).github/workflows/publish-npm.yml' \
+              ':(exclude)scripts/jsr-consumer-deno.json'
+          else
+            test "${resolved}" = "$(git rev-parse HEAD)"
+          fi
 
       - name: Check whether npm version exists
         id: npm_version
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           version="${VERSION#v}"
           bun scripts/verify-published-version.ts npm "${version}" "${GITHUB_SHA}" "${GITHUB_REF}"
@@ -188,7 +228,7 @@ jobs:
 
       - name: Verify published npm provenance
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           version="${VERSION#v}"
           for attempt in 1 2 3 4 5 6; do
@@ -209,17 +249,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Verify release tag target
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --force origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          resolved="$(git rev-list -n 1 "refs/tags/${GITHUB_REF_NAME}")"
-          test "${resolved}" = "${GITHUB_SHA}"
+          git fetch --force origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          resolved="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          test "${resolved}" = "$(git rev-parse HEAD)"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           generate_release_notes: true
-          target_commitish: ${{ github.sha }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.RELEASE_TAG }}
