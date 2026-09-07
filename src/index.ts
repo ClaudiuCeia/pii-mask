@@ -58,7 +58,11 @@ export interface PiiMasker {
   value<T>(input: T): ProtectedValue<T>;
 }
 
-/** Result type for a value copied through a PII transformation. */
+/**
+ * Possible result shapes for a value passed through a PII transformation.
+ * Array-shaped types include both array and conservative object projections
+ * because TypeScript cannot prove their runtime brand.
+ */
 export type ProtectedValue<T> = T extends string
   ? string
   : T extends Function
@@ -92,11 +96,19 @@ type ProtectedRetainedValue<T> = T extends readonly unknown[]
   : ProtectedValue<T>;
 
 type ProtectedRetainedArray<T extends readonly unknown[]> =
+  | ProtectedRetainedActualArray<T>
+  | ProtectedArrayObject<T>;
+
+type ProtectedRetainedActualArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
-    ? ArrayShape<T> extends T
-      ? ReadonlyArray<ProtectedRetainedValue<T[number]>>
-      : { readonly [K in keyof T]: ProtectedRetainedValue<T[K]> }
+    ? ArraySkeleton<T> extends T
+      ? ProtectedRetainedArrayItems<ArraySkeleton<T>>
+      : readonly unknown[]
     : ReadonlyArray<ProtectedRetainedValue<T[number]>>;
+
+type ProtectedRetainedArrayItems<T extends readonly unknown[]> = {
+  readonly [K in keyof T]: ProtectedRetainedValue<T[K]>;
+};
 
 type RetainedObjectPrototypeKey<T extends object> = {
   [K in Extract<ObjectPrototypeKey, keyof T>]: T[K] extends (...arguments_: never[]) => unknown
@@ -114,15 +126,31 @@ type ObjectPrototypeKey =
   | "valueOf";
 
 type ProtectedArray<T extends readonly unknown[]> =
+  | ProtectedActualArray<T>
+  | ProtectedArrayObject<T>;
+
+type ProtectedActualArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
-    ? ArrayShape<T> extends T
-      ? T extends unknown[]
-        ? Array<ProtectedValue<T[number]>>
-        : ReadonlyArray<ProtectedValue<T[number]>>
-      : { [K in keyof T]: ProtectedValue<T[K]> }
+    ? ArraySkeleton<T> extends T
+      ? ProtectedArrayItems<ArraySkeleton<T>>
+      : T extends unknown[]
+        ? unknown[]
+        : readonly unknown[]
     : T extends unknown[]
       ? Array<ProtectedValue<T[number]>>
       : ReadonlyArray<ProtectedValue<T[number]>>;
+
+type ProtectedArrayItems<T extends readonly unknown[]> = {
+  [K in keyof T]: ProtectedValue<T[K]>;
+};
+
+type ProtectedArrayObject<T extends readonly unknown[]> = {
+  readonly [
+    K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+  ]?: K extends number ? unknown : ProtectedObjectValue<T[K]>;
+};
+
+type ArraySkeleton<T extends readonly unknown[]> = T extends unknown[] ? [...T] : readonly [...T];
 
 type ArrayAugmentation<T extends readonly unknown[]> =
   | Exclude<keyof T, keyof ArrayShape<T> | CanonicalArrayIndex<keyof T>>
