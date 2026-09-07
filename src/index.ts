@@ -66,12 +66,29 @@ export type ProtectedValue<T> = T extends string
       ? ProtectedArrayItems<T>
       : Readonly<ProtectedArrayItems<T>>
     : T extends object
-      ? {
-          [
-            K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
-          ]?: ProtectedValue<T[K]>;
-        }
+      ? ProtectedObject<T>
       : T;
+
+type ProtectedObject<T extends object> = {
+  [K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K]?: ProtectedValue<
+    T[K]
+  >;
+} & { [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
+
+type RetainedObjectPrototypeKey<T extends object> = {
+  [K in Extract<ObjectPrototypeKey, keyof T>]: T[K] extends (...arguments_: never[]) => unknown
+    ? never
+    : K;
+}[Extract<ObjectPrototypeKey, keyof T>];
+
+type ObjectPrototypeKey =
+  | "constructor"
+  | "hasOwnProperty"
+  | "isPrototypeOf"
+  | "propertyIsEnumerable"
+  | "toLocaleString"
+  | "toString"
+  | "valueOf";
 
 type ProtectedArrayItems<T extends readonly unknown[]> =
   Exclude<keyof T, keyof unknown[] | CanonicalArrayIndex<keyof T>> extends never
@@ -99,6 +116,8 @@ type CanonicalArrayIndex<Key> = Key extends string
   : never;
 
 const detector = Duckling(PIIParsers);
+const errorIsError = Error.isError;
+const stringValueOf = String.prototype.valueOf;
 
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] => detector.extract(input);
@@ -173,7 +192,7 @@ export const redactText = (input: string, options: RedactOptions = {}): string =
 
 const unboxString = (value: object): string | undefined => {
   try {
-    const unboxed: unknown = Reflect.apply(String.prototype.valueOf, value, []);
+    const unboxed: unknown = Reflect.apply(stringValueOf, value, []);
     return typeof unboxed === "string" ? unboxed : undefined;
   } catch {
     return undefined;
@@ -181,7 +200,7 @@ const unboxString = (value: object): string | undefined => {
 };
 
 const transformError = (
-  error: Error,
+  error: object,
   transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
 ): Error => {
@@ -191,6 +210,11 @@ const transformError = (
       ? messageDescriptor.value
       : "";
   const transformed = new Error(transform(message));
+  Object.defineProperty(transformed, "toJSON", {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
   seen.set(error, transformed);
 
   const nameDescriptor = Object.getOwnPropertyDescriptor(error, "name");
@@ -240,7 +264,7 @@ const transformValue = (
   const existing = seen.get(input);
   if (existing !== undefined) return existing;
 
-  if (input instanceof Error) return transformError(input, transform, seen);
+  if (input instanceof Error || errorIsError(input)) return transformError(input, transform, seen);
 
   if (Array.isArray(input)) {
     const result: unknown[] = [];
@@ -251,7 +275,6 @@ const transformValue = (
     return result;
   }
 
-  const prototype = Object.getPrototypeOf(input);
   const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
   if (
     lengthDescriptor !== undefined &&
@@ -265,9 +288,7 @@ const transformValue = (
     if (boxedString !== undefined) return transform(boxedString);
   }
 
-  const result = Object.create(
-    prototype === Object.prototype || prototype === null ? prototype : null,
-  ) as Record<PropertyKey, unknown>;
+  const result = Object.create(null) as Record<PropertyKey, unknown>;
   seen.set(input, result);
   for (const key of Reflect.ownKeys(input)) {
     const descriptor = Object.getOwnPropertyDescriptor(input, key);

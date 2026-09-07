@@ -78,12 +78,13 @@ describe("structured values", () => {
 
     const result = maskValue(input);
 
-    expect(result).toEqual({
+    expect<unknown>(result).toEqual({
       message: "Email ****************",
       nested: ["IP ***********", 42, { safe: true }],
     });
     expect(result).not.toBe(input);
     expect(result.nested).not.toBe(input.nested);
+    expect(Object.getPrototypeOf(result)).toBeNull();
     expect(input.message).toBe("Email jane@example.com");
   });
 
@@ -111,7 +112,57 @@ describe("structured values", () => {
     expect(result.message).toBe("Request from [REDACTED]");
     expect(result.stack).not.toContain("192.168.0.1");
     expect((result.cause as Error).message).toBe("User [REDACTED]");
-    expect((result as Error & { account: string }).account).toBe("[REDACTED]");
+    expect(Reflect.get(result, "account")).toBe("[REDACTED]");
+  });
+
+  test("protects errors across realms", () => {
+    const input: unknown = runInNewContext('new Error("Request from 192.168.0.1")');
+    const result = redactValue(input);
+
+    expect(result).toBeInstanceOf(Error);
+    if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+    expect(result.message).toBe("Request from [REDACTED]");
+    expect(result.stack).not.toContain("192.168.0.1");
+  });
+
+  test("does not invoke Symbol.toStringTag accessors while classifying values", () => {
+    let reads = 0;
+    const input = Object.create({
+      get [Symbol.toStringTag](): string {
+        reads += 1;
+        throw new Error("Accessor must not run");
+      },
+    }) as { email: string };
+    input.email = "jane@example.com";
+
+    const result = redactValue(input);
+
+    expect(reads).toBe(0);
+    expect(result.email).toBe("[REDACTED]");
+  });
+
+  test("shadows Error prototype serialization hooks installed during projection", () => {
+    const original = new Error("Request from 192.168.0.1");
+    const input = new Proxy(original, {
+      getOwnPropertyDescriptor: (target, key) => {
+        if (key === "message") {
+          Object.defineProperty(Error.prototype, "toJSON", {
+            configurable: true,
+            value: () => original.message,
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      expect(result.message).toBe("Request from [REDACTED]");
+      expect(Object.hasOwn(result, "toJSON")).toBeTrue();
+      expect(JSON.stringify(result)).toBe("{}");
+    } finally {
+      Reflect.deleteProperty(Error.prototype, "toJSON");
+    }
   });
 
   test("normalizes unsupported built-ins without retaining serialization hooks", () => {
@@ -139,9 +190,22 @@ describe("structured values", () => {
     const crossRealmString: unknown = runInNewContext('new String("jane@example.com")');
     const crossRealmResult = redactValue(crossRealmString);
 
-    expect(result).toBe("[REDACTED]");
-    expect(subclassResult).toBe("[REDACTED]");
+    expect<unknown>(result).toBe("[REDACTED]");
+    expect<unknown>(subclassResult).toBe("[REDACTED]");
     expect(crossRealmResult).toBe("[REDACTED]");
+  });
+
+  test("uses the captured boxed-string intrinsic", () => {
+    const valueOf = String.prototype.valueOf;
+    String.prototype.valueOf = () => {
+      throw new Error("Replaced intrinsic must not run");
+    };
+
+    try {
+      expect<unknown>(redactValue(new String("jane@example.com"))).toBe("[REDACTED]");
+    } finally {
+      String.prototype.valueOf = valueOf;
+    }
   });
 
   test("normalizes callable serializers", () => {
@@ -185,7 +249,7 @@ describe("structured values", () => {
     expect(JSON.stringify(result)).toBe('{"toJSON":"[REDACTED]"}');
   });
 
-  test("reuses the prototype selected for plain-object output", () => {
+  test("does not inherit a stateful proxy prototype", () => {
     const serializer = { toJSON: (): string => "serializer@example.com" };
     let prototypeReads = 0;
     const input = new Proxy(
@@ -193,16 +257,39 @@ describe("structured values", () => {
       {
         getPrototypeOf: () => {
           prototypeReads += 1;
-          return prototypeReads <= 2 ? Object.prototype : serializer;
+          return prototypeReads === 1 ? Object.prototype : serializer;
         },
       },
     );
 
     const result = redactValue(input);
 
-    expect(prototypeReads).toBe(2);
-    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(prototypeReads).toBe(1);
+    expect(Object.getPrototypeOf(result)).toBeNull();
     expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
+  });
+
+  test("does not inherit hooks added to Object.prototype during projection", () => {
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Object.prototype, "toJSON", {
+            configurable: true,
+            value: () => "serializer@example.com",
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    try {
+      const result = redactValue(input);
+      expect(Object.getPrototypeOf(result)).toBeNull();
+      expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
+    } finally {
+      Reflect.deleteProperty(Object.prototype, "toJSON");
+    }
   });
 
   test("does not invoke or retain accessors from class instances", () => {
@@ -237,7 +324,7 @@ describe("structured values", () => {
     expect(Reflect.has(result, "toJSON")).toBe(false);
   });
 
-  test("normalizes custom errors and protects their names", () => {
+  test("normalizes custom errors, protects their names, and shadows serializers", () => {
     class AccountError extends Error {
       toJSON(): Readonly<{ email: string }> {
         return { email: "serializer@example.com" };
@@ -251,7 +338,9 @@ describe("structured values", () => {
     expect(Object.getPrototypeOf(result)).toBe(Error.prototype);
     expect(result.name).toBe("[REDACTED]");
     expect(result.message).toBe("Request for [REDACTED] failed");
-    expect(Reflect.has(result, "toJSON")).toBe(false);
+    expect(Object.hasOwn(result, "toJSON")).toBeTrue();
+    expect(Reflect.get(result, "toJSON")).toBeUndefined();
+    expect(JSON.stringify(result)).toBe('{"name":"[REDACTED]"}');
   });
 
   test("does not invoke inherited error accessors", () => {

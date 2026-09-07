@@ -6,6 +6,19 @@ type Equal<Left, Right> =
     ? true
     : false;
 
+type Projected<Shape> = Shape & {
+  [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: never;
+};
+
+type ObjectPrototypeKey =
+  | "constructor"
+  | "hasOwnProperty"
+  | "isPrototypeOf"
+  | "propertyIsEnumerable"
+  | "toLocaleString"
+  | "toString"
+  | "valueOf";
+
 test("transformed value types widen strings and preserve record structure", () => {
   const result = redactValue({
     email: "jane@example.com",
@@ -14,13 +27,15 @@ test("transformed value types widen strings and preserve record structure", () =
 
   const resultType: Equal<
     typeof result,
-    Readonly<{
-      email?: string;
-      nested?: readonly [string, 42];
-    }>
+    Projected<
+      Readonly<{
+        email?: string;
+        nested?: readonly [string, 42];
+      }>
+    >
   > = true;
   expect(resultType).toBeTrue();
-  expect(result).toEqual({
+  expect<unknown>(result).toEqual({
     email: "[REDACTED]",
     nested: ["[REDACTED]", 42],
   });
@@ -42,14 +57,14 @@ test("transformed value types conservatively represent errors and opaque objects
   type ProtectedAccount = ProtectedValue<Account>;
   const accountType: Equal<
     ProtectedAccount,
-    { readonly email?: string; readonly domain?: string }
+    Projected<{ readonly email?: string; readonly domain?: string }>
   > = true;
   expect(accountType).toBeTrue();
 
   const error = redactValue(new TypeError("jane@example.com"));
   const errorType: Equal<
     typeof error,
-    { name?: string; message?: string; stack?: string; cause?: unknown }
+    Projected<{ name?: string; message?: string; stack?: string; cause?: unknown }>
   > = true;
   expect(errorType).toBeTrue();
   expect(error.message).toBe("[REDACTED]");
@@ -61,10 +76,10 @@ test("transformed value types conservatively represent errors and opaque objects
   const structuralResult = redactValue(structuralError);
   const structuralType: Equal<
     typeof structuralResult,
-    { name?: string; message?: string; stack?: string; cause?: unknown }
+    Projected<{ name?: string; message?: string; stack?: string; cause?: unknown }>
   > = true;
   expect(structuralType).toBeTrue();
-  expect(structuralResult).toEqual({
+  expect<unknown>(structuralResult).toEqual({
     name: "Error",
     message: "[REDACTED]",
   });
@@ -74,7 +89,7 @@ test("transformed value types do not infer runtime identity structurally", () =>
   const boxedResult = redactValue(new String("jane@example.com"));
   const boxedIsString: Equal<typeof boxedResult, string> = false;
   expect(boxedIsString).toBeFalse();
-  expect(boxedResult).toBe("[REDACTED]");
+  expect<unknown>(boxedResult).toBe("[REDACTED]");
 
   const proxiedString: InstanceType<StringConstructor> = new Proxy(
     new String("jane@example.com"),
@@ -90,9 +105,21 @@ test("transformed value types do not infer runtime identity structurally", () =>
     email: "jane@example.com" as const,
   });
   const callableResult = redactValue(callable);
-  const callableType: Equal<typeof callableResult, { email?: string }> = true;
+  const callableType: Equal<typeof callableResult, Projected<{ email?: string }>> = true;
+  const toStringType: Equal<typeof callableResult.toString, undefined> = true;
   expect(callableType).toBeTrue();
-  expect(callableResult).toEqual({ email: "[REDACTED]" });
+  expect(toStringType).toBeTrue();
+  expect<unknown>(callableResult).toEqual({ email: "[REDACTED]" });
+
+  class DescribedValue {
+    toString(): string {
+      return "jane@example.com";
+    }
+  }
+  const describedResult = redactValue(new DescribedValue());
+  const describedToStringType: Equal<typeof describedResult.toString, undefined> = true;
+  expect(describedToStringType).toBeTrue();
+  expect(Object.getPrototypeOf(describedResult)).toBeNull();
 });
 
 test("transformed value types omit array subclass members", () => {
@@ -246,9 +273,12 @@ test("transformed value types project construct-only functions", () => {
   }
 
   const result = redactValue(Account);
-  const resultType: Equal<typeof result, { prototype?: { readonly email?: string } }> = true;
+  const resultType: Equal<
+    typeof result,
+    Projected<{ prototype?: Projected<{ readonly email?: string }> }>
+  > = true;
 
   expect(resultType).toBeTrue();
   expect(Object.getPrototypeOf(result)).toBeNull();
-  expect(result).toEqual({});
+  expect<unknown>(result).toEqual({});
 });
