@@ -73,6 +73,7 @@ deno.test("does not inherit Deno inspection hooks", () => {
   try {
     const protectedArray = redactValue(array);
     const protectedError = redactValue(error);
+    if (!Array.isArray(protectedArray)) throw new Error("Expected a protected array");
     if (typeof protectedError === "string") throw new Error("Expected a protected Error");
     deno.inspect(protectedArray);
     deno.inspect(protectedError);

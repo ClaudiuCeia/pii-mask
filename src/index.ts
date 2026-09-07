@@ -120,7 +120,7 @@ type ProtectedRetainedValue<T> = T extends readonly unknown[]
   : ProtectedValue<T>;
 
 type ProtectedRetainedArray<T extends readonly unknown[]> =
-  | PossibleArraySpecialOutput<T>
+  | PossibleArraySpecialOutput
   | ProtectedRetainedActualArray<T>
   | ProtectedArrayObject<T>;
 
@@ -147,15 +147,11 @@ type ObjectPrototypeKey =
   | "valueOf";
 
 type ProtectedArray<T extends readonly unknown[]> =
-  | PossibleArraySpecialOutput<T>
+  | PossibleArraySpecialOutput
   | ProtectedActualArray<T>
   | ProtectedArrayObject<T>;
 
-type PossibleArraySpecialOutput<T extends readonly unknown[]> = unknown[] extends T
-  ? string | Error
-  : readonly unknown[] extends T
-    ? string | Error
-    : never;
+type PossibleArraySpecialOutput = string | Error;
 
 type ProtectedActualArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
@@ -801,6 +797,20 @@ const protectedErrorDescriptors = (() => {
   return freezeObject(result);
 })();
 
+const shadowErrorPrototypeAdditions = (error: Error): void => {
+  const sources = [NativeObjectPrototype, NativeError.prototype];
+  for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    const source = sources[sourceIndex];
+    if (source === undefined) continue;
+    const keys = ownKeys(source);
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+      const key = keys[keyIndex];
+      if (key === undefined || getOwnPropertyDescriptor(error, key) !== undefined) continue;
+      defineProperty(error, key, { configurable: true, value: undefined, writable: true });
+    }
+  }
+};
+
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] =>
   withProtectedDetectorIntrinsics(() => extractPii(input));
@@ -1182,6 +1192,7 @@ const transformError = (
   snapshot: ErrorSnapshot,
   seen: WeakMap<object, unknown>,
   sparseArrays: unknown[][],
+  protectedErrors: Error[],
   pendingStrings: PendingString[],
   eagerTransform: ValueTransform | undefined,
 ): Error => {
@@ -1191,6 +1202,12 @@ const transformError = (
       : "";
   const transformed = new NativeError(message === "" ? "" : undefined);
   defineProperties(transformed, protectedErrorDescriptors);
+  defineProperty(protectedErrors, protectedErrors.length, {
+    configurable: true,
+    enumerable: true,
+    value: transformed,
+    writable: true,
+  });
   setSeen(seen, error, transformed);
 
   if (snapshot.message !== undefined && typeof snapshot.message.value === "string") {
@@ -1233,6 +1250,7 @@ const transformError = (
       snapshot.cause,
       seen,
       sparseArrays,
+      protectedErrors,
       pendingStrings,
       eagerTransform,
     );
@@ -1254,6 +1272,7 @@ const transformError = (
         descriptor,
         seen,
         sparseArrays,
+        protectedErrors,
         pendingStrings,
         eagerTransform,
       );
@@ -1380,6 +1399,7 @@ const defineProjectedProperty = (
   descriptor: DataDescriptor,
   seen: WeakMap<object, unknown>,
   sparseArrays: unknown[][],
+  protectedErrors: Error[],
   pendingStrings: PendingString[],
   eagerTransform: ValueTransform | undefined,
 ): void => {
@@ -1398,6 +1418,7 @@ const defineProjectedProperty = (
     descriptor.value,
     seen,
     sparseArrays,
+    protectedErrors,
     pendingStrings,
     eagerTransform,
   );
@@ -1412,6 +1433,7 @@ const transformValue = (
   input: unknown,
   seen: WeakMap<object, unknown>,
   sparseArrays: unknown[][],
+  protectedErrors: Error[],
   pendingStrings: PendingString[],
   eagerTransform: ValueTransform | undefined,
 ): unknown => {
@@ -1447,6 +1469,7 @@ const transformValue = (
         },
         seen,
         sparseArrays,
+        protectedErrors,
         pendingStrings,
         eagerTransform,
       );
@@ -1472,6 +1495,7 @@ const transformValue = (
         errorSnapshot,
         seen,
         sparseArrays,
+        protectedErrors,
         pendingStrings,
         eagerTransform,
       );
@@ -1492,7 +1516,15 @@ const transformValue = (
 
   const errorSnapshot = snapshotError(input, false);
   if (errorSnapshot !== undefined) {
-    return transformError(input, errorSnapshot, seen, sparseArrays, pendingStrings, eagerTransform);
+    return transformError(
+      input,
+      errorSnapshot,
+      seen,
+      sparseArrays,
+      protectedErrors,
+      pendingStrings,
+      eagerTransform,
+    );
   }
 
   const result = createObject(null) as Record<PropertyKey, unknown>;
@@ -1510,6 +1542,7 @@ const transformValue = (
         descriptor as DataDescriptor,
         seen,
         sparseArrays,
+        protectedErrors,
         pendingStrings,
         eagerTransform,
       );
@@ -1543,13 +1576,22 @@ const finalizeSparseArrays = (sparseArrays: unknown[][]): void => {
   }
 };
 
+const finalizeProtectedErrors = (protectedErrors: Error[]): void => {
+  for (let index = 0; index < protectedErrors.length; index += 1) {
+    const error = protectedErrors[index];
+    if (error !== undefined) shadowErrorPrototypeAdditions(error);
+  }
+};
+
 const protectValue = <T>(input: T, transform: ValueTransform, eager = false): ProtectedValue<T> => {
   const sparseArrays: unknown[][] = [];
+  const protectedErrors: Error[] = [];
   const pendingStrings: PendingString[] = [];
   const result = transformValue(
     input,
     new NativeWeakMap(),
     sparseArrays,
+    protectedErrors,
     pendingStrings,
     eager ? transform : undefined,
   );
@@ -1565,6 +1607,7 @@ const protectValue = <T>(input: T, transform: ValueTransform, eager = false): Pr
   }
   flushPendingStrings(pendingStrings, transform);
   finalizeSparseArrays(sparseArrays);
+  finalizeProtectedErrors(protectedErrors);
   return result as ProtectedValue<T>;
 };
 

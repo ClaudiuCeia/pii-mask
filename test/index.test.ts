@@ -149,6 +149,7 @@ describe("structured values", () => {
       }
     })();
 
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
     expect(result).toEqual(["[REDACTED]"]);
     expect(Object.hasOwn(result, "toJSON")).toBeTrue();
     expect(JSON.stringify(result)).toBe('["[REDACTED]"]');
@@ -193,6 +194,7 @@ describe("structured values", () => {
 
     const result = redactValue(input);
 
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
     expect(invoked).toBeFalse();
     expect(result).toHaveLength(1);
     expect(Object.hasOwn(result, 0)).toBeFalse();
@@ -1533,6 +1535,7 @@ describe("structured values", () => {
     if (typeof join !== "function") throw new Error("Expected a protected join method");
     expect(Reflect.apply(join, result, [separator])).toBe("|");
     const symbolResult = redactValue([1, 2]);
+    if (!Array.isArray(symbolResult)) throw new Error("Expected a protected array");
     const symbolJoin = symbolResult.join;
     if (typeof symbolJoin !== "function") throw new Error("Expected a protected join method");
     expect(() => Reflect.apply(symbolJoin, symbolResult, [Symbol("separator")])).toThrow(TypeError);
@@ -1642,6 +1645,35 @@ describe("structured values", () => {
     }
 
     expect(String(result)).toBe("Error: safe");
+  });
+
+  test("shadows arbitrary Error prototype additions installed during projection", () => {
+    const leakDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, "leak");
+    const input = new Proxy(new Error("jane@example.com"), {
+      getOwnPropertyDescriptor: (error, key) => {
+        if (key === "message") {
+          Object.defineProperty(Error.prototype, "leak", {
+            configurable: true,
+            enumerable: true,
+            value: "jane@example.com",
+          });
+        }
+        return Object.getOwnPropertyDescriptor(error, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+      const inheritedKeys: PropertyKey[] = [];
+      for (const key in result) inheritedKeys.push(key);
+      expect(Reflect.get(result, "leak")).toBeUndefined();
+      expect(Object.hasOwn(result, "leak")).toBeTrue();
+      expect(inheritedKeys).not.toContain("leak");
+    } finally {
+      if (leakDescriptor === undefined) Reflect.deleteProperty(Error.prototype, "leak");
+      else Object.defineProperty(Error.prototype, "leak", leakDescriptor);
+    }
   });
 
   test("does not inherit coercion hooks installed during array projection", () => {

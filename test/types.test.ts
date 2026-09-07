@@ -179,13 +179,16 @@ test("transformed value types omit array subclass members and preserve inherited
     Array<Projected<{ readonly email?: string }>>,
     typeof accounts
   > = true;
-  const mapIsGuaranteed: Extends<typeof accounts.map, typeof Array.prototype.map> = false;
+  const mapIsGuaranteed: Extends<
+    Exclude<typeof accounts, string | Error>["map"],
+    typeof Array.prototype.map
+  > = false;
   const retained = redactValue({ accounts: new Accounts({ email: "jane@example.com" }) });
   if (typeof retained === "string" || retained instanceof Error) {
     throw new Error("Expected an object projection");
   }
   const retainedMapIsGuaranteed: Extends<
-    NonNullable<typeof retained.accounts>["map"],
+    Exclude<NonNullable<typeof retained.accounts>, string | Error>["map"],
     typeof Array.prototype.map
   > = false;
   expect(labelsArrayBranch).toBeTrue();
@@ -209,10 +212,14 @@ test("transformed value types represent structural array impostors", () => {
   expect(input.map((value) => value)).toEqual(["jane@example.com"]);
 
   const result = redactValue(input);
-  const mapIsGuaranteed: Extends<typeof result.map, typeof Array.prototype.map> = false;
+  type ObjectResult = Exclude<typeof result, string | Error>;
+  const mapIsGuaranteed: Extends<ObjectResult["map"], typeof Array.prototype.map> = false;
   const toStringIsGuaranteed: Extends<typeof result.toString, () => string> = false;
   expect(mapIsGuaranteed).toBeFalse();
   expect(toStringIsGuaranteed).toBeFalse();
+  if (typeof result === "string" || result instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
   expect(Reflect.get(result, "map")).toBeUndefined();
   expect(Reflect.get(result, "toString")).toBeUndefined();
   expect<unknown>(result).toEqual({ 0: "[REDACTED]", length: 1 });
@@ -272,14 +279,27 @@ test("transformed value types include primitive outputs for boxed-string candida
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
-test("transformed array types include boxed-string primitive outputs", () => {
-  const input: unknown[] = Object.assign(new String("jane@example.com"), [] as unknown[]);
+test("transformed precise array types include special outputs", () => {
+  const input: string[] = Object.assign(new String("jane@example.com"), [] as string[]);
   const result = redactValue(input);
   const stringBranch: Extends<string, typeof result> = true;
+  const errorBranch: Extends<Error, typeof result> = true;
   const resultIsObject: Extends<typeof result, object> = false;
 
   expect(stringBranch).toBeTrue();
+  expect(errorBranch).toBeTrue();
   expect(resultIsObject).toBeFalse();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
+test("transformed tuple types include special outputs", () => {
+  const input: readonly [] = Object.assign(new String("jane@example.com"), [] as const);
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+  const errorBranch: Extends<Error, typeof result> = true;
+
+  expect(stringBranch).toBeTrue();
+  expect(errorBranch).toBeTrue();
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
@@ -441,6 +461,7 @@ test("transformed value types omit augmented tuple properties", () => {
   const arrayBranch: Extends<string[], typeof result> = true;
 
   expect(arrayBranch).toBeTrue();
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
   expect(Reflect.has(result, "tag")).toBeFalse();
 });
 
@@ -452,6 +473,7 @@ test("transformed value types treat overridden array members as augmentations", 
   const arrayBranch: Extends<string[], typeof result> = true;
 
   expect(arrayBranch).toBeTrue();
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
   expect(typeof Reflect.get(result, "at")).toBe("function");
 });
 
@@ -460,10 +482,11 @@ test("transformed value types do not claim hidden numeric tuple augmentation val
     [7]: { secret: "jane@example.com" as const },
   });
   const result = redactValue(input);
-  const hiddenValueType: Equal<(typeof result)[7], unknown> = true;
+  const hiddenValueType: Equal<Exclude<typeof result, string | Error>[7], unknown> = true;
 
   expect(hiddenValueType).toBeTrue();
-  expect(result[7]).toEqual({ secret: "[REDACTED]" });
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
+  expect<unknown>(result[7]).toEqual({ secret: "[REDACTED]" });
 });
 
 test("transformed value types omit non-index numeric tuple properties", () => {
@@ -476,6 +499,7 @@ test("transformed value types omit non-index numeric tuple properties", () => {
 
   expect(arrayBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
   expect(Reflect.has(result, "-1")).toBeFalse();
   expect(Reflect.has(result, "01")).toBeFalse();
 });
@@ -489,6 +513,7 @@ test("transformed value types omit integers outside the array-index range", () =
 
   expect(arrayBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
   expect(Reflect.has(result, "4294967295")).toBeFalse();
 });
 
@@ -585,6 +610,7 @@ test("transformed value types support long fixed tuples", () => {
     "jane@example.com",
   ] as const;
   const result = redactValue(input);
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
   const last: string | undefined = result[49];
 
   expect(last).toBe("[REDACTED]");
@@ -599,6 +625,7 @@ test("transformed value types support long variadic tuple prefixes", () => {
   ] as const;
   const input: readonly [...typeof prefix, ...string[]] = [...prefix, "jane@example.com"];
   const result = redactValue(input);
+  if (!Array.isArray(result)) throw new Error("Expected a protected array");
   const lastPrefix: 55 | undefined = result[55];
   const tail: unknown = result[56];
 
