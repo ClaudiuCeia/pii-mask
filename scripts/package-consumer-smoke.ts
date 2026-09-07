@@ -101,6 +101,9 @@ const createConsumer = async (
       "const boxedStringBranch: Extends<string, typeof protectedBoxedString> = true;",
       'const protectedError = redactValue(new Error("jane@example.com"));',
       "const errorBranch: Extends<Error, typeof protectedError> = true;",
+      'const broadObject: object = new String("jane@example.com");',
+      "const protectedBroadObject = redactValue(broadObject);",
+      "const broadObjectStringBranch: Extends<string, typeof protectedBroadObject> = true;",
       'const longNumericAugmentation = {} as Record<ThousandDigitKey, { secret: "jane@example.com" }>;',
       'const longNumericTuple = Object.assign(["jane@example.com"] as ["jane@example.com"], longNumericAugmentation);',
       "const protectedLongNumericTuple = redactValue(longNumericTuple);",
@@ -114,6 +117,7 @@ const createConsumer = async (
       "void optionalBranch;",
       "void boxedStringBranch;",
       "void errorBranch;",
+      "void broadObjectStringBranch;",
       "void longNumericTupleBranch;",
     ];
     if (modes.includes("pino")) {

@@ -149,8 +149,11 @@ test("transformed value types do not infer runtime identity structurally", () =>
     }
   }
   const describedResult = redactValue(new DescribedValue());
-  const describedToStringType: Equal<typeof describedResult.toString, undefined> = true;
-  expect(describedToStringType).toBeTrue();
+  const describedStringBranch: Extends<string, typeof describedResult> = true;
+  const describedToStringIsGuaranteed: Extends<typeof describedResult.toString, () => string> =
+    false;
+  expect(describedStringBranch).toBeTrue();
+  expect(describedToStringIsGuaranteed).toBeFalse();
   expect(Object.getPrototypeOf(describedResult)).toBeNull();
 });
 
@@ -197,9 +200,23 @@ test("transformed value types represent structural array impostors", () => {
 
   const result = redactValue(input);
   const mapIsGuaranteed: "map" extends keyof typeof result ? true : false = false;
+  const toStringIsGuaranteed: Extends<typeof result.toString, () => string> = false;
   expect(mapIsGuaranteed).toBeFalse();
+  expect(toStringIsGuaranteed).toBeFalse();
   expect(Reflect.get(result, "map")).toBeUndefined();
-  expect(result).toEqual({ 0: "[REDACTED]", length: 1 });
+  expect(Reflect.get(result, "toString")).toBeUndefined();
+  expect<unknown>(result).toEqual({ 0: "[REDACTED]", length: 1 });
+});
+
+test("transformed value types include primitive outputs for broad objects", () => {
+  const input: object = new String("jane@example.com");
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+  const resultIsObject: Extends<typeof result, object> = false;
+
+  expect(stringBranch).toBeTrue();
+  expect(resultIsObject).toBeFalse();
+  expect<unknown>(result).toBe("[REDACTED]");
 });
 
 test("transformed value types preserve variadic tuple heads", () => {
