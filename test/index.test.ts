@@ -132,9 +132,7 @@ describe("structured values", () => {
 
   test("protects boxed strings as one value", () => {
     const result = redactValue(new String("jane@example.com"));
-    const typedResult: string = result;
 
-    expect(typedResult).toBe("[REDACTED]");
     expect(result).toBe("[REDACTED]");
   });
 

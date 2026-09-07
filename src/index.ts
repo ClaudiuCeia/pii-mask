@@ -61,25 +61,34 @@ export interface PiiMasker {
 /** Result type for a value copied through a PII transformation. */
 export type ProtectedValue<T> = T extends string
   ? string
-  : T extends InstanceType<StringConstructor>
-    ? string
-    : T extends Error
-      ? Error
-      : T extends readonly unknown[]
-        ? number extends T["length"]
-          ? "0" extends keyof T
-            ? { [K in keyof T]: ProtectedValue<T[K]> }
-            : T extends unknown[]
-              ? Array<ProtectedValue<T[number]>>
-              : ReadonlyArray<ProtectedValue<T[number]>>
-          : { [K in keyof T]: ProtectedValue<T[K]> }
-        : T extends object
-          ? {
-              [
-                K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
-              ]?: ProtectedValue<T[K]>;
-            }
-          : T;
+  : T extends readonly unknown[]
+    ? T extends unknown[]
+      ? ProtectedArrayItems<T>
+      : Readonly<ProtectedArrayItems<T>>
+    : T extends object
+      ? {
+          [
+            K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+          ]?: ProtectedValue<T[K]>;
+        }
+      : T;
+
+type ProtectedArrayItems<T extends readonly unknown[]> =
+  Exclude<keyof T, keyof unknown[] | `${number}`> extends never
+    ? number extends T["length"]
+      ? T extends readonly [infer Head, ...infer Tail]
+        ? [ProtectedValue<Head>, ...ProtectedArrayItems<Tail>]
+        : T extends readonly [...infer Initial, infer Last]
+          ? [...ProtectedArrayItems<Initial>, ProtectedValue<Last>]
+          : Array<ProtectedValue<T[number]>>
+      : T extends readonly []
+        ? []
+        : T extends readonly [infer Head, ...infer Tail]
+          ? [ProtectedValue<Head>, ...ProtectedArrayItems<Tail>]
+          : T extends readonly [(infer Head)?, ...infer Tail]
+            ? [ProtectedValue<Head>?, ...ProtectedArrayItems<Tail>]
+            : never
+    : Array<ProtectedValue<T[number]>>;
 
 const detector = Duckling(PIIParsers);
 
