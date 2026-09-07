@@ -209,6 +209,7 @@ type CanonicalArrayIndex<Key> = Key extends string
 
 const detector = Duckling(PIIParsers);
 const NativeError = Error;
+const NativeWeakMap = WeakMap;
 const arrayIsArray = Array.isArray;
 const createObject = Object.create;
 const defineProperty = Object.defineProperty;
@@ -217,6 +218,15 @@ const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const stringValueOf = String.prototype.valueOf;
+const weakMapGet = NativeWeakMap.prototype.get;
+const weakMapSet = NativeWeakMap.prototype.set;
+
+const getSeen = (seen: WeakMap<object, unknown>, input: object): unknown =>
+  reflectApply(weakMapGet, seen, [input]);
+
+const setSeen = (seen: WeakMap<object, unknown>, input: object, output: unknown): void => {
+  reflectApply(weakMapSet, seen, [input, output]);
+};
 
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] => detector.extract(input);
@@ -314,11 +324,14 @@ const transformError = (
     writable: true,
     value: undefined,
   });
-  seen.set(error, transformed);
+  setSeen(seen, error, transformed);
 
   const nameDescriptor = getOwnPropertyDescriptor(error, "name");
   if (nameDescriptor && "value" in nameDescriptor && typeof nameDescriptor.value === "string") {
-    transformed.name = transform(nameDescriptor.value);
+    defineProperty(transformed, "name", {
+      ...nameDescriptor,
+      value: transform(nameDescriptor.value),
+    });
   }
 
   const stackDescriptor = getOwnPropertyDescriptor(error, "stack");
@@ -360,7 +373,7 @@ const transformValue = (
   if (typeof input === "string") return transform(input);
   if ((typeof input !== "object" && typeof input !== "function") || input === null) return input;
 
-  const existing = seen.get(input);
+  const existing = getSeen(seen, input);
   if (existing !== undefined) return existing;
 
   if (input instanceof NativeError || errorIsError(input)) {
@@ -374,7 +387,7 @@ const transformValue = (
       writable: true,
       value: undefined,
     });
-    seen.set(input, result);
+    setSeen(seen, input, result);
     const length = input.length;
     for (let index = 0; index < length; index += 1) {
       defineProperty(result, index, {
@@ -401,7 +414,7 @@ const transformValue = (
   }
 
   const result = createObject(null) as Record<PropertyKey, unknown>;
-  seen.set(input, result);
+  setSeen(seen, input, result);
   for (const key of ownKeys(input)) {
     const descriptor = getOwnPropertyDescriptor(input, key);
     if (descriptor?.enumerable && "value" in descriptor) {
@@ -416,7 +429,7 @@ const transformValue = (
 };
 
 const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> =>
-  transformValue(input, transform, new WeakMap()) as ProtectedValue<T>;
+  transformValue(input, transform, new NativeWeakMap()) as ProtectedValue<T>;
 
 /** Mask strings nested in structured data. */
 export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> =>
