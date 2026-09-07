@@ -26,6 +26,7 @@ const report = (results: readonly BenchmarkResult[]): BenchmarkReport => ({
   runtime: "Bun 1.4.2",
   platform: "darwin",
   architecture: "arm64",
+  pinoHookLifecycle: "streamWrite",
   generatedAt: "2026-09-06T00:00:00.000Z",
   results,
 });
@@ -69,14 +70,14 @@ const runComparator = async (baseline: unknown, candidate: unknown): Promise<Com
 };
 
 const summary = (...rows: readonly string[]): readonly string[] => [
-  "Performance regression threshold: 15% on median time/op (1 us absolute floor; */plain reference scenarios excluded)",
+  "Performance regression threshold: 15% on median time/op (1 us absolute floor; */plain reference scenarios excluded; changed Pino hook lifecycles reset log scenarios)",
   "",
   "Benchmark | Baseline (median) | Candidate (median) | Change | Status",
   "--- | ---: | ---: | ---: | :---:",
   ...rows,
 ];
 
-test("the benchmark comparator accepts a valid version 2 Mitata report", async () => {
+test("the benchmark comparator accepts a valid version 3 Mitata report", async () => {
   const result = await runComparator(
     report([resultFixture("maskText/protected", 10_000)]),
     report([resultFixture("maskText/protected", 10_500)]),
@@ -162,6 +163,21 @@ test("the benchmark comparator ignores a regression below the absolute floor", a
   expect(result).toEqual({
     exitCode: 0,
     stdout: summary("maskText/protected | 1.00 us | 1.90 us | +90.00% | PASS"),
+    error: undefined,
+  });
+});
+
+test("the benchmark comparator resets log scenarios when the Pino hook lifecycle changes", async () => {
+  const baseline = {
+    ...report([resultFixture("log/medium/protected", 4_000)]),
+    pinoHookLifecycle: "logMethod" as const,
+  };
+  const candidate = report([resultFixture("log/medium/protected", 8_000)]);
+  const result = await runComparator(baseline, candidate);
+
+  expect(result).toEqual({
+    exitCode: 0,
+    stdout: summary("log/medium/protected | 4.00 us | 8.00 us | +100.00% | RESET"),
     error: undefined,
   });
 });

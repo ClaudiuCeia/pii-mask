@@ -1,5 +1,6 @@
-export const BENCHMARK_REPORT_VERSION = 2;
+export const BENCHMARK_REPORT_VERSION = 3;
 export const BENCHMARK_RUNNER = "mitata";
+type PinoHookLifecycle = "logMethod" | "streamWrite";
 
 export type BenchmarkResult = Readonly<{
   name: string;
@@ -18,6 +19,7 @@ export type BenchmarkReport = Readonly<{
   runtime: string;
   platform: string;
   architecture: string;
+  pinoHookLifecycle: PinoHookLifecycle;
   generatedAt: string;
   results: readonly BenchmarkResult[];
 }>;
@@ -53,6 +55,7 @@ export const parseBenchmarkReport = (value: unknown, source: string): BenchmarkR
     value.platform.length === 0 ||
     typeof value.architecture !== "string" ||
     value.architecture.length === 0 ||
+    (value.pinoHookLifecycle !== "logMethod" && value.pinoHookLifecycle !== "streamWrite") ||
     !isIsoTimestamp(value.generatedAt) ||
     !Array.isArray(value.results) ||
     value.results.length === 0
@@ -99,6 +102,7 @@ export const parseBenchmarkReport = (value: unknown, source: string): BenchmarkR
     runtime: value.runtime,
     platform: value.platform,
     architecture: value.architecture,
+    pinoHookLifecycle: value.pinoHookLifecycle,
     generatedAt: value.generatedAt,
     results,
   };
