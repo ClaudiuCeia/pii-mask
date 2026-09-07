@@ -316,6 +316,9 @@ const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const reflectDeleteProperty = Reflect.deleteProperty;
+const setAdd = NativeSet.prototype.add;
+const setDelete = NativeSet.prototype.delete;
+const setHas = NativeSet.prototype.has;
 const textEncoderDescriptor = getOwnPropertyDescriptor(globalThis, "TextEncoder");
 const NativeTextEncoderPrototype = (() => {
   if (textEncoderDescriptor === undefined) return undefined;
@@ -538,7 +541,6 @@ const withProtectedDetectorIntrinsics = <T>(
   intrinsics: readonly ProtectedIntrinsic[] = protectedDetectorIntrinsics,
 ): T => {
   const changedDescriptors: (PropertyDescriptor | undefined)[] = [];
-  const changedBeforeOperation: boolean[] = [];
   const changedIndexes: number[] = [];
   let changedCount = 0;
 
@@ -560,12 +562,6 @@ const withProtectedDetectorIntrinsics = <T>(
         value: index,
         writable: true,
       });
-      defineProperty(changedBeforeOperation, index, {
-        configurable: true,
-        enumerable: true,
-        value: true,
-        writable: true,
-      });
       if (intrinsic.descriptor === undefined) {
         if (!reflectDeleteProperty(intrinsic.target, intrinsic.key)) {
           throw new TypeError("Unable to protect detector intrinsic");
@@ -577,29 +573,6 @@ const withProtectedDetectorIntrinsics = <T>(
     }
     return operation();
   } finally {
-    for (let index = intrinsics.length - 1; index >= 0; index -= 1) {
-      const intrinsic = intrinsics[index];
-      if (intrinsic === undefined) continue;
-      const protectsStringOperation =
-        intrinsic.target === NativeString ||
-        intrinsic.target === NativeString.prototype ||
-        intrinsic.target === stringIteratorPrototype ||
-        (intrinsic.target === globalThis && intrinsic.key === "String");
-      if (
-        !protectsStringOperation ||
-        getOwnPropertyDescriptor(changedBeforeOperation, index) !== undefined
-      ) {
-        continue;
-      }
-      const current = getOwnPropertyDescriptor(intrinsic.target, intrinsic.key);
-      if (!dataDescriptorsEqual(current, intrinsic.descriptor)) {
-        if (intrinsic.descriptor === undefined) {
-          reflectDeleteProperty(intrinsic.target, intrinsic.key);
-        } else {
-          defineProperty(intrinsic.target, intrinsic.key, intrinsic.descriptor);
-        }
-      }
-    }
     for (let index = changedCount - 1; index >= 0; index -= 1) {
       const intrinsicIndex = changedIndexes[index];
       if (intrinsicIndex === undefined) continue;
@@ -840,7 +813,7 @@ type ValueTransform = ((input: string, entities: PIIEntity[]) => string) & {
   readonly peek?: (input: string) => string | undefined;
 };
 
-type CachedTextTransform = (input: string, entities?: PIIEntity[]) => string;
+type CachedTextTransform = (input: string) => string;
 
 interface CachedTransforms {
   readonly text: CachedTextTransform;
@@ -1344,7 +1317,9 @@ const withCache = (
   transform: (input: string, entities?: PIIEntity[]) => string,
   cacheSize: number,
 ): CachedTransforms => {
-  if (cacheSize === 0) return { text: transform, value: transform };
+  if (cacheSize === 0) {
+    return { text: (input) => transform(input), value: transform };
+  }
 
   const cache = new NativeMap<string, string>();
   const cacheDelete = reflectApply(functionBind, mapDelete, [cache]) as (input: string) => boolean;
@@ -1357,28 +1332,32 @@ const withCache = (
     input: string,
     output: string,
   ) => Map<string, string>;
+  const structuredInputs = new NativeSet<string>();
+  const structuredAdd = reflectApply(functionBind, setAdd, [structuredInputs]) as (
+    input: string,
+  ) => Set<string>;
+  const structuredDelete = reflectApply(functionBind, setDelete, [structuredInputs]) as (
+    input: string,
+  ) => boolean;
+  const structuredHas = reflectApply(functionBind, setHas, [structuredInputs]) as (
+    input: string,
+  ) => boolean;
   let size = 0;
   const lookup = (input: string): string | undefined => {
+    if (!structuredHas(input)) return undefined;
     const hit = cacheGet(input);
     if (hit === undefined) return undefined;
     cacheDelete(input);
     cacheSet(input, hit);
     return hit;
   };
-
-  const cachedTransform = (input: string, entities?: PIIEntity[]): string => {
-    const hit = cacheGet(input);
-    if (hit !== undefined) {
-      cacheDelete(input);
-      cacheSet(input, hit);
-      return hit;
-    }
-
-    const transformed = transform(input, entities);
+  const store = (input: string, transformed: string, structured: boolean): string => {
     const insertedReentrantly = cacheHas(input);
     if (insertedReentrantly) {
       cacheDelete(input);
       cacheSet(input, transformed);
+      if (!structured) structuredDelete(input);
+      else structuredAdd(input);
       return transformed;
     }
     if (size >= cacheSize) {
@@ -1386,17 +1365,35 @@ const withCache = (
       const oldest = reflectApply(mapIteratorNext, keys, []) as IteratorResult<string>;
       if (!oldest.done) {
         cacheDelete(oldest.value);
+        structuredDelete(oldest.value);
         size -= 1;
       }
     }
     cacheSet(input, transformed);
+    if (structured) structuredAdd(input);
     size += 1;
     return transformed;
   };
-  const valueTransform = ((input: string, entities: PIIEntity[]): string =>
-    cachedTransform(input, entities)) as ValueTransform;
+  const cachedTextTransform = (input: string): string => {
+    const hit = cacheGet(input);
+    if (hit !== undefined) {
+      cacheDelete(input);
+      cacheSet(input, hit);
+      return hit;
+    }
+    return store(input, transform(input), false);
+  };
+  const valueTransform = ((input: string, entities: PIIEntity[]): string => {
+    const hit = cacheGet(input);
+    if (hit !== undefined && structuredHas(input)) {
+      cacheDelete(input);
+      cacheSet(input, hit);
+      return hit;
+    }
+    return store(input, transform(input, entities), true);
+  }) as ValueTransform;
   defineProperty(valueTransform, "peek", { value: lookup });
-  return { text: cachedTransform, value: valueTransform };
+  return { text: cachedTextTransform, value: valueTransform };
 };
 
 /** Create a reusable text and structured-value protector. */

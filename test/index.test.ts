@@ -1641,6 +1641,44 @@ describe("createPiiMasker", () => {
     expect(replacements).toBe(1);
   });
 
+  test("does not trust text cache entries seeded during structured traversal", () => {
+    const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
+    if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
+    const masker = createPiiMasker({ mode: "redact" });
+    const email = "jane@example.com";
+    const trigger = new Proxy(Object.create(null) as object, {
+      ownKeys: (target) => {
+        Object.defineProperty(RegExp.prototype, "exec", {
+          ...execDescriptor,
+          value: (): null => null,
+        });
+        expect(masker.text(email)).toBe(email);
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return masker.value({ email, trigger });
+      } finally {
+        Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
+      }
+    })();
+
+    requireObjectProjection(result);
+    expect(result.email).toBe("[REDACTED]");
+  });
+
+  test("does not expose structured cache provenance through text arguments", () => {
+    const email = "jane@example.com";
+
+    for (const cacheSize of [0, 2]) {
+      const masker = createPiiMasker({ cacheSize, mode: "redact" });
+      expect(Reflect.apply(masker.text, undefined, [email, []])).toBe("[REDACTED]");
+      expect(masker.value({ email })).toEqual({ email: "[REDACTED]" });
+    }
+  });
+
   test("counts reentrant cache inserts once", () => {
     let reenter: ((input: string) => string) | undefined;
     let replacements = 0;
