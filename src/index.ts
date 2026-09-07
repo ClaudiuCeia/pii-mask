@@ -148,11 +148,15 @@ type OverriddenArrayMember<
 
 type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
-type DigitsOf<Value extends string, Result extends Digit[] = []> = Value extends ""
-  ? Result
-  : Value extends `${infer Head extends Digit}${infer Tail}`
-    ? DigitsOf<Tail, [...Result, Head]>
-    : never;
+type DigitsOf<Value extends string, Result extends Digit[] = []> = Result["length"] extends 10
+  ? Value extends ""
+    ? Result
+    : [...Result, Digit]
+  : Value extends ""
+    ? Result
+    : Value extends `${infer Head extends Digit}${infer Tail}`
+      ? DigitsOf<Tail, [...Result, Head]>
+      : never;
 
 type DigitRank = {
   "0": [];
