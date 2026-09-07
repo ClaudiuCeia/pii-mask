@@ -185,6 +185,7 @@ describe("structured values", () => {
 
     expect(result).toBeInstanceOf(Error);
     expect(result).not.toBe(input);
+    if (typeof result === "string") throw new Error("Expected a protected Error");
     expect(result.message).toBe("Request from [REDACTED]");
     expect(result.stack).not.toContain("192.168.0.1");
     expect((result.cause as Error).message).toBe("User [REDACTED]");
@@ -224,6 +225,7 @@ describe("structured values", () => {
 
     const result = redactValue(input);
 
+    if (typeof result === "string") throw new Error("Expected a protected Error");
     expect(result.message).toBe("Request from [REDACTED]");
     expect(result.stack).not.toContain("192.168.0.1");
   });
@@ -260,6 +262,7 @@ describe("structured values", () => {
 
     try {
       const result = redactValue(input);
+      if (typeof result === "string") throw new Error("Expected a protected Error");
       expect(result.message).toBe("Request from [REDACTED]");
       expect(Object.hasOwn(result, "toJSON")).toBeTrue();
       expect(JSON.stringify(result)).toBe("{}");
@@ -298,6 +301,7 @@ describe("structured values", () => {
       }
     })();
 
+    if (typeof result === "string") throw new Error("Expected a protected Error");
     expect(result.name).toBe("Account [REDACTED]");
     expect(Reflect.get(result, "toJSON")).toBeUndefined();
     expect(JSON.stringify(result)).toBe('{"name":"Account [REDACTED]"}');
@@ -463,6 +467,30 @@ describe("structured values", () => {
     })();
 
     expect(Reflect.get(result, "email")).toBe("[REDACTED]");
+  });
+
+  test("uses captured Math.min after proxy traversal", () => {
+    const minDescriptor = Object.getOwnPropertyDescriptor(Math, "min");
+    if (minDescriptor === undefined) throw new Error("Math.min descriptor is missing");
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Math, "min", {
+            configurable: true,
+            value: (_left: number, right: number) => right,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    try {
+      expect(maskValue(input).email).toBe("****************");
+    } finally {
+      Object.defineProperty(Math, "min", minDescriptor);
+    }
   });
 
   test("uses the captured entity sorter after proxy traversal", () => {
@@ -743,6 +771,7 @@ describe("structured values", () => {
     input.name = "jane@example.com";
     const result = redactValue(input);
 
+    if (typeof result === "string") throw new Error("Expected a protected Error");
     expect(Object.getPrototypeOf(result)).toBe(Error.prototype);
     expect(result.name).toBe("[REDACTED]");
     expect(result.message).toBe("Request for [REDACTED] failed");
@@ -768,6 +797,7 @@ describe("structured values", () => {
     const input = new AccountError();
     const result = redactValue(input);
 
+    if (typeof result === "string") throw new Error("Expected a protected Error");
     expect(reads).toBe(0);
     expect(result.name).toBe("Error");
     expect(result.message).toBe("");

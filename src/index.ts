@@ -68,7 +68,7 @@ export type ProtectedValue<T> = T extends string
   : T extends typeof String.prototype
     ? string | ProtectedObject<T>
     : T extends Error
-      ? Error | ProtectedObject<T>
+      ? string | Error | ProtectedObject<T>
       : T extends Function
         ? ProtectedFunction<T>
         : T extends readonly unknown[]
@@ -118,7 +118,7 @@ type ProtectedObject<T extends object> = {
         : K
       : K
   ]?: ProtectedObjectValue<T[K]>;
-} & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
+} & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: unknown };
 
 type ProtectedObjectValue<T> = T extends readonly unknown[]
   ? ProtectedRetainedArray<T>
@@ -181,7 +181,7 @@ type ProtectedArrayObject<T extends readonly unknown[]> = {
         : K
       : K
   ]?: K extends number ? unknown : ProtectedObjectValue<T[K]>;
-} & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
+} & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: unknown };
 
 type ArraySkeleton<T extends readonly unknown[]> = T extends unknown[] ? [...T] : readonly [...T];
 
@@ -295,6 +295,7 @@ const mapIteratorNext = Object.getPrototypeOf(new NativeMap().keys())
   .next as () => IteratorResult<unknown>;
 const mapKeys = NativeMap.prototype.keys;
 const mapSet = NativeMap.prototype.set;
+const mathMin = Math.min;
 const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
@@ -379,7 +380,7 @@ const replaceEntities = (
 
 const naturalNumber = (name: string, value: number | undefined): number => {
   if (value === undefined) return 0;
-  if (!Number.isSafeInteger(value) || value < 0) {
+  if (!numberIsSafeInteger(value) || value < 0) {
     throw new RangeError(`${name} must be a non-negative safe integer`);
   }
   return value;
@@ -396,8 +397,8 @@ export const maskText = (input: string, options: MaskOptions = {}): string => {
 
   return replaceEntities(input, entities, (entity) => {
     const length = entity.end - entity.start;
-    const visibleStart = Math.min(keepStart, length);
-    const visibleEnd = Math.min(keepEnd, length - visibleStart);
+    const visibleStart = mathMin(keepStart, length);
+    const visibleEnd = mathMin(keepEnd, length - visibleStart);
     return (
       sliceString(entity.text, 0, visibleStart) +
       repeatString(mask, length - visibleStart - visibleEnd) +
@@ -554,8 +555,7 @@ const transformError = (
 
   if (snapshot.cause !== undefined) {
     defineProperty(transformed, "cause", {
-      configurable: true,
-      writable: true,
+      ...snapshot.cause,
       value: transformValue(snapshot.cause.value, transform, seen),
     });
   }

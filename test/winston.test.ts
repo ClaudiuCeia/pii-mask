@@ -103,12 +103,66 @@ describe("winstonPiiMasking", () => {
       transports: [new winston.transports.Console({ silent: true })],
     });
 
-    logger.info("Email jane@example.com", { ip: "192.168.0.1" });
+    logger.info("Email jane@example.com", {
+      cause: "Contact jane@example.com",
+      ip: "192.168.0.1",
+    });
 
     expect(JSON.parse(entries[0] ?? "{}")).toEqual({
+      cause: "Contact [REDACTED]",
       ip: "[REDACTED]",
       level: "info",
       message: "Email [REDACTED]",
     });
+  });
+
+  test("uses captured reflection after protecting proxied entries", () => {
+    const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+    const descriptor = getOwnPropertyDescriptor(Object, "getOwnPropertyDescriptor");
+    if (descriptor === undefined) throw new Error("Descriptor intrinsic is missing");
+    const wrap = winston.format((info) => {
+      const originalMessage = info.message;
+      return new Proxy(info, {
+        ownKeys: (target) => {
+          Object.defineProperty(Object, "getOwnPropertyDescriptor", {
+            configurable: true,
+            value: (value: object, key: PropertyKey) => {
+              Object.defineProperty(value, "toJSON", {
+                configurable: true,
+                value: () => ({ level: "info", message: originalMessage }),
+              });
+              return Reflect.apply(getOwnPropertyDescriptor, Object, [value, key]);
+            },
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      });
+    });
+    const entries: string[] = [];
+    const capture = winston.format((info) => {
+      const message: unknown = info[Symbol.for("message")];
+      if (typeof message === "string") entries.push(message);
+      return info;
+    });
+    const logger = winston.createLogger({
+      format: winston.format.combine(
+        wrap(),
+        winstonPiiMasking({ mode: "redact" }),
+        winston.format.json(),
+        capture(),
+      ),
+      transports: [new winston.transports.Console({ silent: true })],
+    });
+
+    try {
+      logger.info("Email jane@example.com");
+      expect(JSON.parse(entries[0] ?? "{}")).toMatchObject({
+        level: "info",
+        message: "Email [REDACTED]",
+      });
+    } finally {
+      Object.defineProperty(Object, "getOwnPropertyDescriptor", descriptor);
+    }
   });
 });

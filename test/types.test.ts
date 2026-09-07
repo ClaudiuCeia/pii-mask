@@ -14,7 +14,7 @@ type ThousandDigitKey =
   `${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}`;
 
 type Projected<Shape> = Readonly<Shape> & {
-  readonly [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: never;
+  readonly [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: unknown;
 };
 
 type OpaqueProjected = { readonly [K in PropertyKey]?: unknown } & {
@@ -74,12 +74,10 @@ test("transformed value types conservatively represent errors and opaque objects
 
   const error = redactValue(new TypeError("jane@example.com"));
   const errorBranch: Extends<Error, typeof error> = true;
-  const errorIsOnlyProjected: Extends<
-    typeof error,
-    Projected<{ name?: string; message?: string; stack?: string; cause?: unknown }>
-  > = false;
+  const errorStringBranch: Extends<string, typeof error> = true;
   expect(errorBranch).toBeTrue();
-  expect(errorIsOnlyProjected).toBeFalse();
+  expect(errorStringBranch).toBeTrue();
+  if (typeof error === "string") throw new Error("Expected a protected Error");
   expect(error.message).toBe("[REDACTED]");
 
   const structuralError: Error = {
@@ -88,12 +86,9 @@ test("transformed value types conservatively represent errors and opaque objects
   };
   const structuralResult = redactValue(structuralError);
   const structuralErrorBranch: Extends<Error, typeof structuralResult> = true;
-  const structuralErrorIsOnlyProjected: Extends<
-    typeof structuralResult,
-    Projected<{ name?: string; message?: string; stack?: string; cause?: unknown }>
-  > = false;
+  const structuralStringBranch: Extends<string, typeof structuralResult> = true;
   expect(structuralErrorBranch).toBeTrue();
-  expect(structuralErrorIsOnlyProjected).toBeFalse();
+  expect(structuralStringBranch).toBeTrue();
   expect<unknown>(structuralResult).toEqual({
     name: "Error",
     message: "[REDACTED]",
@@ -141,9 +136,9 @@ test("transformed value types do not infer runtime identity structurally", () =>
   });
   const callableResult = redactValue(callable);
   const callableType: Equal<typeof callableResult, Projected<{ email?: string }>> = true;
-  const toStringType: Equal<typeof callableResult.toString, undefined> = true;
+  const toStringIsAbsent: Extends<typeof callableResult.toString, undefined> = false;
   expect(callableType).toBeTrue();
-  expect(toStringType).toBeTrue();
+  expect(toStringIsAbsent).toBeFalse();
   expect<unknown>(callableResult).toEqual({ email: "[REDACTED]" });
 
   class DescribedValue {
@@ -264,10 +259,8 @@ test("transformed value types include Error outputs for diagnostic supertypes", 
   Object.defineProperty(input, "message", { value: "jane@example.com", writable: true });
   const result = redactValue(input);
   const errorBranch: Extends<Error, typeof result> = true;
-  const resultIsOnlyProjected: Extends<typeof result, Projected<{ message?: string }>> = false;
 
   expect(errorBranch).toBeTrue();
-  expect(resultIsOnlyProjected).toBeFalse();
   expect(result.message).toBe("[REDACTED]");
 });
 
@@ -303,6 +296,18 @@ test("transformed value types include strings for finite boxed-string candidates
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
+test("transformed value types include strings for Error-typed boxed candidates", () => {
+  const input: Error = Object.assign(new String("jane@example.com"), {
+    message: "diagnostic",
+    name: "Error",
+  });
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+
+  expect(stringBranch).toBeTrue();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
 test("transformed value types allow concealed Object-named data properties", () => {
   const input: object = { toString: "jane@example.com" };
   const result = redactValue(input);
@@ -313,6 +318,19 @@ test("transformed value types allow concealed Object-named data properties", () 
   const toStringIsAbsent: Extends<typeof result.toString, undefined> = false;
 
   expect(toStringCanBePresent).toBeTrue();
+  expect(toStringIsAbsent).toBeFalse();
+  expect(result.toString).toBe("[REDACTED]");
+});
+
+test("transformed value types allow prototype-named fields concealed by narrow shapes", () => {
+  const source = { foo: "safe", toString: "jane@example.com" };
+  const input: { foo: string } = source;
+  const result = redactValue(input);
+  if (typeof result === "string" || result instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
+  const toStringIsAbsent: Extends<typeof result.toString, undefined> = false;
+
   expect(toStringIsAbsent).toBeFalse();
   expect(result.toString).toBe("[REDACTED]");
 });
