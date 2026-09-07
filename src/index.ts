@@ -74,8 +74,17 @@ export type ProtectedValue<T> = T extends string
         : T;
 
 type ProtectedObjectValue<T> = T extends readonly unknown[]
-  ? Readonly<ProtectedArray<T>>
+  ? ProtectedRetainedArray<T>
   : ProtectedValue<T>;
+
+type ProtectedRetainedValue<T> = T extends readonly unknown[]
+  ? ProtectedRetainedArray<T>
+  : ProtectedValue<T>;
+
+type ProtectedRetainedArray<T extends readonly unknown[]> =
+  ArrayAugmentation<T> extends never
+    ? { readonly [K in keyof T]: ProtectedRetainedValue<T[K]> }
+    : ReadonlyArray<ProtectedRetainedValue<T[number]>>;
 
 type ProtectedArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
