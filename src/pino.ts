@@ -58,8 +58,13 @@ const transformJsonStringValues = (input: string, transform: (value: string) => 
     let next = end + 1;
     while (isJsonWhitespace(input[next])) next += 1;
     if (input[next] !== ":") {
-      const value: unknown = JSON.parse(input.slice(start, end + 1));
-      if (typeof value !== "string") throw new PinoOutputError();
+      const encoded = input.slice(start + 1, end);
+      let value = encoded;
+      if (encoded.includes("\\")) {
+        const decoded: unknown = JSON.parse(input.slice(start, end + 1));
+        if (typeof decoded !== "string") throw new PinoOutputError();
+        value = decoded;
+      }
       const transformed = transform(value);
       if (transformed !== value) {
         result += input.slice(unchangedStart, start) + JSON.stringify(transformed);
