@@ -17,6 +17,10 @@ type Projected<Shape> = Readonly<Shape> & {
   readonly [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: never;
 };
 
+type OpaqueProjected = { readonly [K in PropertyKey]?: unknown } & {
+  readonly [K in ObjectPrototypeKey]?: unknown;
+};
+
 type ObjectPrototypeKey =
   | "constructor"
   | "hasOwnProperty"
@@ -219,6 +223,29 @@ test("transformed value types include primitive outputs for broad objects", () =
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
+test("transformed value types include primitive outputs for boxed-string supertypes", () => {
+  const input: { readonly length: number } = new String("jane@example.com");
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+  const resultIsObject: Extends<typeof result, object> = false;
+
+  expect(stringBranch).toBeTrue();
+  expect(resultIsObject).toBeFalse();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
+test("transformed value types allow concealed Object-named data properties", () => {
+  const input: object = { toString: "jane@example.com" };
+  const result = redactValue(input);
+  if (typeof result === "string") throw new Error("Expected an object projection");
+  const toStringCanBePresent: Extends<string, typeof result.toString> = true;
+  const toStringIsAbsent: Extends<typeof result.toString, undefined> = false;
+
+  expect(toStringCanBePresent).toBeTrue();
+  expect(toStringIsAbsent).toBeFalse();
+  expect(result.toString).toBe("[REDACTED]");
+});
+
 test("transformed value types preserve variadic tuple heads", () => {
   const input: readonly ["jane@example.com", ...number[]] = ["jane@example.com", 1, 2];
   const result = redactValue(input);
@@ -417,9 +444,9 @@ test("transformed value types project broad function interfaces", () => {
   const broadResult = redactValue(broad);
   const callableResult = redactValue(callable);
   const newableResult = redactValue(newable);
-  const broadType: Equal<typeof broadResult, Projected<object>> = true;
-  const callableType: Equal<typeof callableResult, Projected<object>> = true;
-  const newableType: Equal<typeof newableResult, Projected<object>> = true;
+  const broadType: Equal<typeof broadResult, OpaqueProjected> = true;
+  const callableType: Equal<typeof callableResult, OpaqueProjected> = true;
+  const newableType: Equal<typeof newableResult, OpaqueProjected> = true;
 
   expect(broadType).toBeTrue();
   expect(callableType).toBeTrue();
@@ -437,7 +464,7 @@ test("transformed value types project broad function interfaces", () => {
     },
   ) as Function;
   const structuralResult = redactValue(structuralFunction);
-  const structuralType: Equal<typeof structuralResult, Projected<object>> = true;
+  const structuralType: Equal<typeof structuralResult, OpaqueProjected> = true;
   expect(structuralType).toBeTrue();
   expect(Reflect.has(structuralResult, "apply")).toBeFalse();
 });

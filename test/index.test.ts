@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { inspect } from "node:util";
 import { runInNewContext } from "node:vm";
 import {
   createPiiMasker,
@@ -336,6 +337,16 @@ describe("structured values", () => {
     expect(JSON.stringify(result)).toBe('"[REDACTED]"');
   });
 
+  test("protects boxed strings before applying structural Error detection", () => {
+    const input = new String("jane@example.com");
+    Object.defineProperty(input, "message", { value: "diagnostic" });
+
+    const result = redactValue(input);
+
+    expect<unknown>(result).toBe("[REDACTED]");
+    expect(JSON.stringify(result)).toBe('"[REDACTED]"');
+  });
+
   test("fails closed for malformed boxed-string candidates", () => {
     const value = "jane@example.com";
     const input = Object.create(null) as object;
@@ -449,6 +460,57 @@ describe("structured values", () => {
     })();
 
     expect(Reflect.get(result, "email")).toBe("[REDACTED]");
+  });
+
+  test("does not inherit array inspection hooks installed during projection", () => {
+    const inspectKey = Symbol.for("nodejs.util.inspect.custom");
+    const inspectDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, inspectKey);
+    const input = new Proxy(["jane@example.com"], {
+      getOwnPropertyDescriptor: (target, key) => {
+        Object.defineProperty(Array.prototype, inspectKey, {
+          configurable: true,
+          value: () => target[0],
+        });
+        return Object.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      expect(inspect(result)).toBe("[ '[REDACTED]' ]");
+    } finally {
+      if (inspectDescriptor === undefined) {
+        Reflect.deleteProperty(Array.prototype, inspectKey);
+      } else {
+        Object.defineProperty(Array.prototype, inspectKey, inspectDescriptor);
+      }
+    }
+  });
+
+  test("does not inherit Error inspection hooks installed during projection", () => {
+    const inspectKey = Symbol.for("nodejs.util.inspect.custom");
+    const inspectDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, inspectKey);
+    const target = new Error("jane@example.com");
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (error, key) => {
+        Object.defineProperty(Error.prototype, inspectKey, {
+          configurable: true,
+          value: () => error.message,
+        });
+        return Object.getOwnPropertyDescriptor(error, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      expect(inspect(result).split("\n")[0]).toBe("Error: [REDACTED]");
+    } finally {
+      if (inspectDescriptor === undefined) {
+        Reflect.deleteProperty(Error.prototype, inspectKey);
+      } else {
+        Object.defineProperty(Error.prototype, inspectKey, inspectDescriptor);
+      }
+    }
   });
 
   test("protects enumerable data properties on class instances", () => {
@@ -675,6 +737,35 @@ describe("createPiiMasker", () => {
     expect(masker.text("jane@example.com")).toBe("<pii>");
     expect(masker.value(["jane@example.com"])).toEqual(["<pii>"]);
     expect(replacements).toBe(1);
+  });
+
+  test("counts reentrant cache inserts once", () => {
+    let reenter: ((input: string) => string) | undefined;
+    let replacements = 0;
+    const masker = createPiiMasker({
+      cacheSize: 2,
+      mode: "redact",
+      replacement: ({ text }) => {
+        replacements += 1;
+        if (reenter !== undefined) {
+          const invoke = reenter;
+          reenter = undefined;
+          invoke(text);
+        }
+        return "[REDACTED]";
+      },
+    });
+    reenter = masker.text;
+
+    expect(masker.text("a@example.com")).toBe("[REDACTED]");
+    expect(masker.text("b@example.com")).toBe("[REDACTED]");
+    expect(masker.text("a@example.com")).toBe("[REDACTED]");
+    expect(replacements).toBe(3);
+  });
+
+  test("cache can be disabled", () => {
+    const masker = createPiiMasker({ cacheSize: 0 });
+    expect(masker.text("Email jane@example.com")).toBe("Email ****************");
   });
 
   test("rejects invalid cache sizes", () => {
