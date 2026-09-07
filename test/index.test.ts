@@ -178,6 +178,33 @@ describe("structured values", () => {
     expect(result.stack).not.toContain("192.168.0.1");
   });
 
+  test("protects proxied errors across realms", () => {
+    const crossRealm: unknown = runInNewContext('new Error("Request from 192.168.0.1")');
+    if (typeof crossRealm !== "object" || crossRealm === null) {
+      throw new Error("Expected a cross-realm Error object");
+    }
+
+    const result = redactValue(new Proxy(crossRealm, {}));
+
+    expect(result).toBeInstanceOf(Error);
+    if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+    expect(result.message).toBe("Request from [REDACTED]");
+    expect(result.stack).not.toContain("192.168.0.1");
+  });
+
+  test("does not inspect proxy prototypes while classifying errors", () => {
+    const input = new Proxy(new Error("Request from 192.168.0.1"), {
+      getPrototypeOf: () => {
+        throw new Error("Prototype trap must not run");
+      },
+    });
+
+    const result = redactValue(input);
+
+    expect(result.message).toBe("Request from [REDACTED]");
+    expect(result.stack).not.toContain("192.168.0.1");
+  });
+
   test("does not invoke Symbol.toStringTag accessors while classifying values", () => {
     let reads = 0;
     const input = Object.create({
@@ -283,6 +310,32 @@ describe("structured values", () => {
     expect(crossRealmResult).toBe("[REDACTED]");
   });
 
+  test("protects proxy-wrapped boxed strings as one value", () => {
+    const result = redactValue(new Proxy(new String("jane@example.com"), {}));
+
+    expect<unknown>(result).toBe("[REDACTED]");
+    expect(JSON.stringify(result)).toBe('"[REDACTED]"');
+  });
+
+  test("fails closed for malformed boxed-string candidates", () => {
+    const value = "jane@example.com";
+    const input = Object.create(null) as object;
+    Object.defineProperty(input, "length", { value: value.length });
+    for (let index = 0; index < value.length; index += 1) {
+      Object.defineProperty(input, index, {
+        configurable: false,
+        enumerable: true,
+        writable: index === 0,
+        value: value[index],
+      });
+    }
+
+    const result = redactValue(input);
+
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(JSON.stringify(result)).toBe("{}");
+  });
+
   test("uses the captured boxed-string intrinsic", () => {
     const valueOf = String.prototype.valueOf;
     String.prototype.valueOf = () => {
@@ -376,7 +429,7 @@ describe("structured values", () => {
     expect(JSON.stringify(result)).toBe('{"toJSON":"[REDACTED]"}');
   });
 
-  test("does not inherit a stateful proxy prototype", () => {
+  test("does not consult or inherit a stateful proxy prototype", () => {
     const serializer = { toJSON: (): string => "serializer@example.com" };
     let prototypeReads = 0;
     const input = new Proxy(
@@ -391,7 +444,7 @@ describe("structured values", () => {
 
     const result = redactValue(input);
 
-    expect(prototypeReads).toBe(1);
+    expect(prototypeReads).toBe(0);
     expect(Object.getPrototypeOf(result)).toBeNull();
     expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
   });

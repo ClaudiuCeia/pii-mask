@@ -16,4 +16,6 @@ Security fixes target the latest published version. Upgrade before reporting an 
 
 The detector can produce false negatives and false positives. Applications remain responsible for testing their own data formats and protecting unknown or domain-specific identifiers.
 
+Structured-value protection does not invoke source accessors, inherited methods, or serializers, but reflective operations on a `Proxy` still invoke its traps. A trap can throw, mutate state, or block synchronously; only pass trusted, terminating proxy handlers to the structured-value APIs.
+
 The LRU cache is disabled by default. Setting `cacheSize` to a positive entry limit retains original input strings as keys and transformed strings as values until eviction or until the `PiiMasker` methods are no longer reachable. The current parser dependency independently retains up to eight complete detector input strings per loaded parser module instance in an entry-count cache; `cacheSize` controls only `pii-mask`'s LRU.

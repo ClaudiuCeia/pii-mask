@@ -58,7 +58,11 @@ export interface PiiMasker {
   value<T>(input: T): ProtectedValue<T>;
 }
 
-/** Result type for a value copied through a PII transformation. */
+/**
+ * Possible result shapes for a value passed through a PII transformation.
+ * Array-shaped types include both array and conservative object projections
+ * because TypeScript cannot prove their runtime brand.
+ */
 export type ProtectedValue<T> = T extends string
   ? string
   : T extends Function
@@ -92,11 +96,19 @@ type ProtectedRetainedValue<T> = T extends readonly unknown[]
   : ProtectedValue<T>;
 
 type ProtectedRetainedArray<T extends readonly unknown[]> =
+  | ProtectedRetainedActualArray<T>
+  | ProtectedArrayObject<T>;
+
+type ProtectedRetainedActualArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
-    ? ArrayShape<T> extends T
-      ? ReadonlyArray<ProtectedRetainedValue<T[number]>>
-      : { readonly [K in keyof T]: ProtectedRetainedValue<T[K]> }
+    ? ArraySkeleton<T> extends T
+      ? ProtectedRetainedArrayItems<ArraySkeleton<T>>
+      : readonly unknown[]
     : ReadonlyArray<ProtectedRetainedValue<T[number]>>;
+
+type ProtectedRetainedArrayItems<T extends readonly unknown[]> = {
+  readonly [K in keyof T]: ProtectedRetainedValue<T[K]>;
+};
 
 type RetainedObjectPrototypeKey<T extends object> = {
   [K in Extract<ObjectPrototypeKey, keyof T>]: T[K] extends (...arguments_: never[]) => unknown
@@ -114,15 +126,31 @@ type ObjectPrototypeKey =
   | "valueOf";
 
 type ProtectedArray<T extends readonly unknown[]> =
+  | ProtectedActualArray<T>
+  | ProtectedArrayObject<T>;
+
+type ProtectedActualArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
-    ? ArrayShape<T> extends T
-      ? T extends unknown[]
-        ? Array<ProtectedValue<T[number]>>
-        : ReadonlyArray<ProtectedValue<T[number]>>
-      : { [K in keyof T]: ProtectedValue<T[K]> }
+    ? ArraySkeleton<T> extends T
+      ? ProtectedArrayItems<ArraySkeleton<T>>
+      : T extends unknown[]
+        ? unknown[]
+        : readonly unknown[]
     : T extends unknown[]
       ? Array<ProtectedValue<T[number]>>
       : ReadonlyArray<ProtectedValue<T[number]>>;
+
+type ProtectedArrayItems<T extends readonly unknown[]> = {
+  [K in keyof T]: ProtectedValue<T[K]>;
+};
+
+type ProtectedArrayObject<T extends readonly unknown[]> = {
+  readonly [
+    K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+  ]?: K extends number ? unknown : ProtectedObjectValue<T[K]>;
+};
+
+type ArraySkeleton<T extends readonly unknown[]> = T extends unknown[] ? [...T] : readonly [...T];
 
 type ArrayAugmentation<T extends readonly unknown[]> =
   | Exclude<keyof T, keyof ArrayShape<T> | CanonicalArrayIndex<keyof T>>
@@ -221,6 +249,7 @@ const createObject = Object.create;
 const defineProperty = Object.defineProperty;
 const errorIsError = NativeError.isError;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const stringValueOf = String.prototype.valueOf;
@@ -314,15 +343,96 @@ const unboxString = (value: object): string | undefined => {
   }
 };
 
+type DataDescriptor = PropertyDescriptor & { value: unknown };
+
+const getOwnDataDescriptor = (input: object, key: PropertyKey): DataDescriptor | undefined => {
+  const descriptor = getOwnPropertyDescriptor(input, key);
+  return descriptor !== undefined && "value" in descriptor
+    ? (descriptor as DataDescriptor)
+    : undefined;
+};
+
+type BoxedStringProbe =
+  | { readonly kind: "not-candidate" }
+  | { readonly kind: "value"; readonly value: string }
+  | { readonly kind: "invalid" };
+
+const probeBoxedString = (input: object): BoxedStringProbe => {
+  if (typeof input === "function") return { kind: "not-candidate" };
+
+  const lengthDescriptor = getOwnDataDescriptor(input, "length");
+  if (
+    lengthDescriptor === undefined ||
+    typeof lengthDescriptor.value !== "number" ||
+    lengthDescriptor.configurable ||
+    lengthDescriptor.enumerable ||
+    lengthDescriptor.writable
+  ) {
+    return { kind: "not-candidate" };
+  }
+
+  const unboxed = unboxString(input);
+  if (unboxed !== undefined) return { kind: "value", value: unboxed };
+
+  const length = lengthDescriptor.value;
+  if (!numberIsSafeInteger(length) || length < 0) return { kind: "invalid" };
+
+  const keys = ownKeys(input);
+  if (length >= keys.length) return { kind: "invalid" };
+
+  let value = "";
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = getOwnDataDescriptor(input, index);
+    if (
+      descriptor === undefined ||
+      descriptor.configurable ||
+      !descriptor.enumerable ||
+      descriptor.writable ||
+      typeof descriptor.value !== "string" ||
+      descriptor.value.length !== 1
+    ) {
+      return { kind: "invalid" };
+    }
+    value += descriptor.value;
+  }
+
+  return { kind: "value", value };
+};
+
+interface ErrorSnapshot {
+  readonly cause: DataDescriptor | undefined;
+  readonly message: DataDescriptor | undefined;
+  readonly name: DataDescriptor | undefined;
+  readonly stack: DataDescriptor | undefined;
+}
+
+const snapshotError = (input: object, branded: boolean): ErrorSnapshot | undefined => {
+  if (!branded && typeof input === "function") return undefined;
+
+  const message = getOwnDataDescriptor(input, "message");
+  const stack = getOwnDataDescriptor(input, "stack");
+  const hasDiagnosticShape =
+    (message !== undefined && !message.enumerable && typeof message.value === "string") ||
+    (stack !== undefined && !stack.enumerable && typeof stack.value === "string");
+
+  if (!branded && !hasDiagnosticShape) return undefined;
+  return {
+    cause: getOwnDataDescriptor(input, "cause"),
+    message,
+    name: getOwnDataDescriptor(input, "name"),
+    stack,
+  };
+};
+
 const transformError = (
   error: object,
+  snapshot: ErrorSnapshot,
   transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
 ): Error => {
-  const messageDescriptor = getOwnPropertyDescriptor(error, "message");
   const message =
-    messageDescriptor && "value" in messageDescriptor && typeof messageDescriptor.value === "string"
-      ? messageDescriptor.value
+    snapshot.message !== undefined && typeof snapshot.message.value === "string"
+      ? snapshot.message.value
       : "";
   const transformed = new NativeError(transform(message));
   defineProperty(transformed, "toJSON", {
@@ -332,25 +442,25 @@ const transformError = (
   });
   setSeen(seen, error, transformed);
 
-  const nameDescriptor = getOwnPropertyDescriptor(error, "name");
-  if (nameDescriptor && "value" in nameDescriptor && typeof nameDescriptor.value === "string") {
+  if (snapshot.name !== undefined && typeof snapshot.name.value === "string") {
     defineProperty(transformed, "name", {
-      ...nameDescriptor,
-      value: transform(nameDescriptor.value),
+      ...snapshot.name,
+      value: transform(snapshot.name.value),
     });
   }
 
-  const stackDescriptor = getOwnPropertyDescriptor(error, "stack");
-  if (stackDescriptor && "value" in stackDescriptor && typeof stackDescriptor.value === "string") {
-    transformed.stack = transform(stackDescriptor.value);
+  if (snapshot.stack !== undefined && typeof snapshot.stack.value === "string") {
+    defineProperty(transformed, "stack", {
+      ...snapshot.stack,
+      value: transform(snapshot.stack.value),
+    });
   }
 
-  const causeDescriptor = getOwnPropertyDescriptor(error, "cause");
-  if (causeDescriptor && "value" in causeDescriptor) {
+  if (snapshot.cause !== undefined) {
     defineProperty(transformed, "cause", {
       configurable: true,
       writable: true,
-      value: transformValue(causeDescriptor.value, transform, seen),
+      value: transformValue(snapshot.cause.value, transform, seen),
     });
   }
 
@@ -358,8 +468,8 @@ const transformError = (
     if (key === "name" || key === "message" || key === "stack" || key === "cause") {
       continue;
     }
-    const descriptor = getOwnPropertyDescriptor(error, key);
-    if (descriptor?.enumerable && "value" in descriptor) {
+    const descriptor = getOwnDataDescriptor(error, key);
+    if (descriptor?.enumerable) {
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
       defineProperty(transformed, key, {
         ...descriptor,
@@ -382,10 +492,6 @@ const transformValue = (
   const existing = getSeen(seen, input);
   if (existing !== undefined) return existing;
 
-  if (input instanceof NativeError || errorIsError(input)) {
-    return transformError(input, transform, seen);
-  }
-
   if (arrayIsArray(input)) {
     const result: unknown[] = [];
     defineProperty(result, "toJSON", {
@@ -406,17 +512,17 @@ const transformValue = (
     return result;
   }
 
-  const lengthDescriptor = getOwnPropertyDescriptor(input, "length");
-  if (
-    lengthDescriptor !== undefined &&
-    "value" in lengthDescriptor &&
-    typeof lengthDescriptor.value === "number" &&
-    !lengthDescriptor.configurable &&
-    !lengthDescriptor.enumerable &&
-    !lengthDescriptor.writable
-  ) {
-    const boxedString = unboxString(input);
-    if (boxedString !== undefined) return transform(boxedString);
+  const errorSnapshot = snapshotError(input, errorIsError(input));
+  if (errorSnapshot !== undefined) {
+    return transformError(input, errorSnapshot, transform, seen);
+  }
+
+  const boxedString = probeBoxedString(input);
+  if (boxedString.kind === "value") return transform(boxedString.value);
+  if (boxedString.kind === "invalid") {
+    const result = createObject(null) as Record<PropertyKey, unknown>;
+    setSeen(seen, input, result);
+    return result;
   }
 
   const result = createObject(null) as Record<PropertyKey, unknown>;
