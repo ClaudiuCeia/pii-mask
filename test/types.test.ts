@@ -142,9 +142,9 @@ test("transformed value types preserve tuple indices with iterator overrides", (
     [Symbol.iterator]: () => [][Symbol.iterator](),
   });
   const result = redactValue(input);
-  const first: string = result[0];
+  const resultType: Equal<typeof result, string[]> = true;
 
-  expect(first).toBe("[REDACTED]");
+  expect(resultType).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
 });
 
@@ -164,4 +164,64 @@ test("transformed value types preserve optional variadic tuple heads", () => {
 
   expect(resultType).toBeTrue();
   expect(result).toEqual(["[REDACTED]", 1, 2]);
+});
+
+test("transformed value types support long fixed tuples", () => {
+  const input = [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    "jane@example.com",
+  ] as const;
+  const result = redactValue(input);
+  const last: string = result[49];
+
+  expect(last).toBe("[REDACTED]");
+  expect(result).toHaveLength(50);
 });
