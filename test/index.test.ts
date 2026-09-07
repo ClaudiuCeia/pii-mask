@@ -422,6 +422,35 @@ describe("structured values", () => {
     expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
   });
 
+  test("uses captured Map methods while projecting callable proxies", () => {
+    const getDescriptor = Object.getOwnPropertyDescriptor(Map.prototype, "get");
+    if (getDescriptor === undefined) throw new Error("Map get descriptor is missing");
+    const input = new Proxy(
+      Object.assign(() => undefined, { email: "jane@example.com" }),
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Map.prototype, "get", {
+            configurable: true,
+            value: (key: unknown) => key,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const masker = createPiiMasker({ mode: "redact" });
+
+    const result = (() => {
+      try {
+        return masker.value(input);
+      } finally {
+        Object.defineProperty(Map.prototype, "get", getDescriptor);
+      }
+    })();
+
+    expect(Reflect.get(result, "email")).toBe("[REDACTED]");
+  });
+
   test("protects enumerable data properties on class instances", () => {
     class Account {
       email = "jane@example.com";

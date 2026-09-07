@@ -74,7 +74,9 @@ export type ProtectedValue<T> = T extends string
         : T extends readonly unknown[]
           ? ProtectedArray<T>
           : T extends object
-            ? ProtectedObject<T>
+            ? object extends T
+              ? string | ProtectedObject<T>
+              : ProtectedObject<T>
             : T;
 
 type ProtectedFunction<T extends Function> = Function extends T
@@ -152,7 +154,7 @@ type ProtectedArrayObject<T extends readonly unknown[]> = {
   readonly [
     K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
   ]?: K extends number ? unknown : ProtectedObjectValue<T[K]>;
-};
+} & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
 
 type ArraySkeleton<T extends readonly unknown[]> = T extends unknown[] ? [...T] : readonly [...T];
 
@@ -251,12 +253,19 @@ type CanonicalArrayIndex<Key> = Key extends string
 
 const detector = Duckling(PIIParsers);
 const NativeError = Error;
+const NativeMap = Map;
 const NativeWeakMap = WeakMap;
 const arrayIsArray = Array.isArray;
 const createObject = Object.create;
 const defineProperty = Object.defineProperty;
 const errorIsError = NativeError.isError;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const mapDelete = NativeMap.prototype.delete;
+const mapGet = NativeMap.prototype.get;
+const mapIteratorNext = Object.getPrototypeOf(new NativeMap().keys())
+  .next as () => IteratorResult<unknown>;
+const mapKeys = NativeMap.prototype.keys;
+const mapSet = NativeMap.prototype.set;
 const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
@@ -574,22 +583,28 @@ const withCache = (
 ): ((input: string) => string) => {
   if (cacheSize === 0) return transform;
 
-  const cache = new Map<string, string>();
+  const cache = new NativeMap<string, string>();
+  let size = 0;
   return (input) => {
-    const hit = cache.get(input);
+    const hit = reflectApply(mapGet, cache, [input]) as string | undefined;
     if (hit !== undefined) {
       // Refresh recency.
-      cache.delete(input);
-      cache.set(input, hit);
+      reflectApply(mapDelete, cache, [input]);
+      reflectApply(mapSet, cache, [input, hit]);
       return hit;
     }
 
     const transformed = transform(input);
-    if (cache.size >= cacheSize) {
-      const oldest = cache.keys().next().value;
-      if (oldest !== undefined) cache.delete(oldest);
+    if (size >= cacheSize) {
+      const keys = reflectApply(mapKeys, cache, []);
+      const oldest = reflectApply(mapIteratorNext, keys, []) as IteratorResult<string>;
+      if (!oldest.done) {
+        reflectApply(mapDelete, cache, [oldest.value]);
+        size -= 1;
+      }
     }
-    cache.set(input, transformed);
+    reflectApply(mapSet, cache, [input, transformed]);
+    size += 1;
     return transformed;
   };
 };
