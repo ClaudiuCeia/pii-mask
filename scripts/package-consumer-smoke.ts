@@ -86,10 +86,13 @@ const createConsumer = async (
       "const tupleType: Equal<typeof protectedTuple, readonly [string, ...number[]]> = true;",
       'const protectedTail = redactValue([1, "jane@example.com"] as readonly [...number[], "jane@example.com"]);',
       "const tailType: Equal<typeof protectedTail, readonly [...number[], string]> = true;",
+      'const protectedOptional = redactValue(["jane@example.com", 1] as readonly ["jane@example.com"?, ...number[]]);',
+      "const optionalType: Equal<typeof protectedOptional, readonly [string?, ...number[]]> = true;",
       "void textType;",
       "void recordType;",
       "void tupleType;",
       "void tailType;",
+      "void optionalType;",
     ];
     if (modes.includes("pino")) {
       imports.push(

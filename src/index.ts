@@ -82,7 +82,11 @@ type ProtectedArrayItems<T extends readonly unknown[]> =
         ? [ProtectedValue<Head>, ...ProtectedArrayItems<Tail>]
         : T extends readonly [...infer Initial, infer Last]
           ? [...ProtectedArrayItems<Initial>, ProtectedValue<Last>]
-          : Array<ProtectedValue<T[number]>>
+          : "0" extends keyof T
+            ? T extends readonly [(infer Head)?, ...infer Tail]
+              ? [ProtectedValue<Head>?, ...ProtectedArrayItems<Tail>]
+              : Array<ProtectedValue<T[number]>>
+            : Array<ProtectedValue<T[number]>>
       : T extends readonly []
         ? []
         : T extends readonly [infer Head, ...infer Tail]
