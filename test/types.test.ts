@@ -81,9 +81,13 @@ test("transformed value types conservatively represent errors and opaque objects
 
   class MutableAccount {
     email = "jane@example.com";
+    emails: "jane@example.com"[] = ["jane@example.com"];
   }
   const retained = redactValue(new MutableAccount());
-  const retainedType: Equal<typeof retained, { readonly email?: string }> = true;
+  const retainedType: Equal<
+    typeof retained,
+    { readonly email?: string; readonly emails?: readonly string[] }
+  > = true;
   expect(retainedType).toBeTrue();
 });
 

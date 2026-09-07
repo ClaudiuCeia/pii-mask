@@ -69,9 +69,13 @@ export type ProtectedValue<T> = T extends string
         ? {
             readonly [
               K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
-            ]?: ProtectedValue<T[K]>;
+            ]?: ProtectedObjectValue<T[K]>;
           }
         : T;
+
+type ProtectedObjectValue<T> = T extends readonly unknown[]
+  ? Readonly<ProtectedArray<T>>
+  : ProtectedValue<T>;
 
 type ProtectedArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
