@@ -74,7 +74,7 @@ export type ProtectedValue<T> = T extends string
       : T;
 
 type ProtectedArrayItems<T extends readonly unknown[]> =
-  Exclude<keyof T, keyof unknown[] | `${number}`> extends never
+  Exclude<keyof T, keyof unknown[] | CanonicalArrayIndex<keyof T>> extends never
     ? Array<T[number]>[typeof Symbol.iterator] extends T[typeof Symbol.iterator]
       ? number extends T["length"]
         ? T extends readonly [infer Head, ...infer Tail]
@@ -89,6 +89,14 @@ type ProtectedArrayItems<T extends readonly unknown[]> =
         : { [K in keyof T]: ProtectedValue<T[K]> }
       : Array<ProtectedValue<T[number]>>
     : Array<ProtectedValue<T[number]>>;
+
+type CanonicalArrayIndex<Key> = Key extends string
+  ? Key extends `${bigint}`
+    ? Key extends `-${string}`
+      ? never
+      : Key
+    : never
+  : never;
 
 const detector = Duckling(PIIParsers);
 

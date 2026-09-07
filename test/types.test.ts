@@ -137,6 +137,20 @@ test("transformed value types omit augmented tuple properties", () => {
   expect(Reflect.has(result, "tag")).toBeFalse();
 });
 
+test("transformed value types omit non-index numeric tuple properties", () => {
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
+    "-1": { secret: "jane@example.com" },
+    "01": { secret: "jane@example.com" },
+  });
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, string[]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(result).toEqual(["[REDACTED]"]);
+  expect(Reflect.has(result, "-1")).toBeFalse();
+  expect(Reflect.has(result, "01")).toBeFalse();
+});
+
 test("transformed value types preserve tuple indices with iterator overrides", () => {
   const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
     [Symbol.iterator]: () => [][Symbol.iterator](),
@@ -224,4 +238,17 @@ test("transformed value types support long fixed tuples", () => {
 
   expect(last).toBe("[REDACTED]");
   expect(result).toHaveLength(50);
+});
+
+test("transformed value types project construct-only functions", () => {
+  class Account {
+    readonly email = "jane@example.com";
+  }
+
+  const result = redactValue(Account);
+  const resultType: Equal<typeof result, { prototype?: { readonly email?: string } }> = true;
+
+  expect(resultType).toBeTrue();
+  expect(Object.getPrototypeOf(result)).toBeNull();
+  expect(result).toEqual({});
 });
