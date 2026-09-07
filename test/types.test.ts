@@ -118,8 +118,7 @@ test("transformed value types do not infer runtime identity structurally", () =>
   const proxiedResult = redactValue(proxiedString);
   const proxiedIsString: Equal<typeof proxiedResult, string> = false;
   expect(proxiedIsString).toBeFalse();
-  expect(Object.getPrototypeOf(proxiedResult)).toBeNull();
-  expect(Object.values(proxiedResult).join("")).toBe("jane@example.com");
+  expect<unknown>(proxiedResult).toBe("[REDACTED]");
 
   const callable = Object.assign(() => "ignored", {
     email: "jane@example.com" as const,
