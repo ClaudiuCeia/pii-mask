@@ -7,6 +7,11 @@ type Equal<Left, Right> =
     : false;
 
 type Extends<Left, Right> = [Left] extends [Right] ? true : false;
+type TenDigits = "1234567890";
+type HundredDigits =
+  `${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}`;
+type ThousandDigitKey =
+  `${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}`;
 
 type Projected<Shape> = Readonly<Shape> & {
   readonly [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: never;
@@ -264,6 +269,16 @@ test("transformed value types omit integers outside the array-index range", () =
   expect(arrayBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
   expect(Reflect.has(result, "4294967295")).toBeFalse();
+});
+
+test("transformed value types bound numeric tuple augmentation analysis", () => {
+  const augmentation = {} as Record<ThousandDigitKey, { secret: "jane@example.com" }>;
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], augmentation);
+  const result = redactValue(input);
+  const arrayBranch: Extends<string[], typeof result> = true;
+
+  expect(arrayBranch).toBeTrue();
+  expect(result).toEqual(["[REDACTED]"]);
 });
 
 test("transformed value types preserve tuple indices with iterator overrides", () => {
