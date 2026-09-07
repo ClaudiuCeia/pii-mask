@@ -55,8 +55,170 @@ export interface PiiMasker {
   /** Protect PII in one string. */
   text(input: string): string;
   /** Protect every string in a plain object, array, or Error without mutating it. */
-  value<T>(input: T): T;
+  value<T>(input: T): ProtectedValue<T>;
 }
+
+/**
+ * Possible result shapes for a value passed through a PII transformation.
+ * Structural object, array, and broad function types include every runtime
+ * branch because TypeScript cannot prove their prototypes or runtime brands.
+ */
+export type ProtectedValue<T> = T extends string
+  ? string
+  : T extends ConcreteFunction
+    ? T
+    : T extends Function
+      ? T | ProtectedObject<T>
+      : T extends readonly unknown[]
+        ? ProtectedArray<T>
+        : T extends object
+          ? T | ProtectedObject<T>
+          : T;
+
+type ConcreteFunction =
+  | ((...arguments_: never[]) => unknown)
+  | (abstract new (...arguments_: never[]) => unknown);
+
+type ProtectedObject<T extends object> = {
+  readonly [K in keyof T as T[K] extends ConcreteFunction ? never : K]?: ProtectedObjectValue<T[K]>;
+};
+
+type ProtectedObjectValue<T> = T extends readonly unknown[]
+  ? ProtectedRetainedArray<T>
+  : ProtectedValue<T>;
+
+type ProtectedRetainedValue<T> = T extends readonly unknown[]
+  ? ProtectedRetainedArray<T>
+  : ProtectedValue<T>;
+
+type ProtectedRetainedArray<T extends readonly unknown[]> =
+  | Readonly<T>
+  | ProtectedRetainedActualArray<T>
+  | ProtectedArrayObject<T>;
+
+type ProtectedRetainedActualArray<T extends readonly unknown[]> =
+  ArrayAugmentation<T> extends never
+    ? ArraySkeleton<T> extends T
+      ? { readonly [K in keyof ArraySkeleton<T>]: ProtectedRetainedValue<ArraySkeleton<T>[K]> }
+      : readonly unknown[]
+    : ReadonlyArray<ProtectedRetainedValue<T[number]>>;
+
+type ProtectedArray<T extends readonly unknown[]> =
+  | T
+  | ProtectedActualArray<T>
+  | ProtectedArrayObject<T>;
+
+type ProtectedActualArray<T extends readonly unknown[]> =
+  ArrayAugmentation<T> extends never
+    ? ArraySkeleton<T> extends T
+      ? { [K in keyof ArraySkeleton<T>]: ProtectedValue<ArraySkeleton<T>[K]> }
+      : T extends unknown[]
+        ? unknown[]
+        : readonly unknown[]
+    : T extends unknown[]
+      ? Array<ProtectedValue<T[number]>>
+      : ReadonlyArray<ProtectedValue<T[number]>>;
+
+type ProtectedArrayObject<T extends readonly unknown[]> = {
+  readonly [K in keyof T as T[K] extends ConcreteFunction ? never : K]?: K extends number
+    ? unknown
+    : ProtectedObjectValue<T[K]>;
+};
+
+type ArraySkeleton<T extends readonly unknown[]> = T extends unknown[] ? [...T] : readonly [...T];
+
+type ArrayAugmentation<T extends readonly unknown[]> =
+  | Exclude<keyof T, keyof ArrayShape<T> | CanonicalArrayIndex<keyof T>>
+  | OverriddenArrayMember<T>;
+
+type ArrayShape<T extends readonly unknown[]> = T extends unknown[]
+  ? Array<T[number]>
+  : ReadonlyArray<T[number]>;
+
+type OverriddenArrayMember<
+  T extends readonly unknown[],
+  Shape extends ArrayShape<T> = ArrayShape<T>,
+> = {
+  [K in Exclude<keyof Shape, number | "length">]: K extends keyof T
+    ? Shape[K] extends T[K]
+      ? never
+      : K
+    : never;
+}[Exclude<keyof Shape, number | "length">];
+
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
+type DigitsOf<Value extends string, Result extends Digit[] = []> = Result["length"] extends 10
+  ? Value extends ""
+    ? Result
+    : [...Result, Digit]
+  : Value extends ""
+    ? Result
+    : Value extends `${infer Head extends Digit}${infer Tail}`
+      ? DigitsOf<Tail, [...Result, Head]>
+      : never;
+
+type DigitRank = {
+  "0": [];
+  "1": [unknown];
+  "2": [unknown, unknown];
+  "3": [unknown, unknown, unknown];
+  "4": [unknown, unknown, unknown, unknown];
+  "5": [unknown, unknown, unknown, unknown, unknown];
+  "6": [unknown, unknown, unknown, unknown, unknown, unknown];
+  "7": [unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+  "8": [unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+  "9": [unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+};
+
+type CompareDigit<Left extends Digit, Right extends Digit> = DigitRank[Left] extends [
+  ...DigitRank[Right],
+  ...infer Extra,
+]
+  ? Extra extends []
+    ? "equal"
+    : "greater"
+  : "less";
+
+type IsAtMost<
+  Value extends string,
+  Maximum extends string,
+> = Value extends `${infer ValueHead extends Digit}${infer ValueTail}`
+  ? Maximum extends `${infer MaximumHead extends Digit}${infer MaximumTail}`
+    ? CompareDigit<ValueHead, MaximumHead> extends infer Comparison
+      ? Comparison extends "equal"
+        ? IsAtMost<ValueTail, MaximumTail>
+        : Comparison extends "less"
+          ? true
+          : false
+      : never
+    : false
+  : true;
+
+type IsArrayIndex<Value extends string> = DigitsOf<Value>["length"] extends
+  | 1
+  | 2
+  | 3
+  | 4
+  | 5
+  | 6
+  | 7
+  | 8
+  | 9
+  ? true
+  : DigitsOf<Value>["length"] extends 10
+    ? IsAtMost<Value, "4294967294">
+    : false;
+
+type CanonicalArrayIndex<Key> = Key extends string
+  ? Key extends `${bigint}`
+    ? Key extends `-${string}`
+      ? never
+      : IsArrayIndex<Key> extends true
+        ? Key
+        : never
+    : never
+  : never;
 
 const detector = Duckling(PIIParsers);
 
@@ -187,7 +349,9 @@ const transformValue = (
   if (Array.isArray(input)) {
     const result: unknown[] = [];
     seen.set(input, result);
-    for (const item of input) result.push(transformValue(item, transform, seen));
+    for (let index = 0; index < input.length; index += 1) {
+      result.push(transformValue(input[index], transform, seen));
+    }
     return result;
   }
 
@@ -207,15 +371,15 @@ const transformValue = (
   return result;
 };
 
-const protectValue = <T>(input: T, transform: (input: string) => string): T =>
-  transformValue(input, transform, new WeakMap()) as T;
+const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> =>
+  transformValue(input, transform, new WeakMap()) as ProtectedValue<T>;
 
 /** Mask every string nested in a plain object, array, or Error. */
-export const maskValue = <T>(input: T, options: MaskOptions = {}): T =>
+export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => maskText(value, options));
 
 /** Redact every string nested in a plain object, array, or Error. */
-export const redactValue = <T>(input: T, options: RedactOptions = {}): T =>
+export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => redactText(value, options));
 
 const DEFAULT_CACHE_SIZE = 1024;
@@ -261,6 +425,6 @@ export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
 
   return {
     text: transform,
-    value: <T>(input: T) => protectValue(input, transform),
+    value: <T>(input: T): ProtectedValue<T> => protectValue(input, transform),
   };
 };
