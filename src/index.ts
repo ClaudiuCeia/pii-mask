@@ -326,6 +326,7 @@ const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const reflectDeleteProperty = Reflect.deleteProperty;
+const regExpExec = NativeRegExp.prototype.exec;
 const setAdd = NativeSet.prototype.add;
 const setDelete = NativeSet.prototype.delete;
 const setHas = NativeSet.prototype.has;
@@ -352,6 +353,8 @@ const setIteratorPrototype = getPrototypeOf(reflectApply(setIterator, new Native
 const iteratorPrototype = getPrototypeOf(arrayIteratorPrototype);
 const NativeTypedArray = getPrototypeOf(NativeUint8Array);
 const NativeTypedArrayPrototype = getPrototypeOf(NativeUint8Array.prototype);
+const cryptoAddressCandidate =
+  /(?:0x[\dA-Fa-f]{40}|(?:1|3)[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{24,33}|(?:bc1|BC1)[023456789A-HJ-NP-Za-hj-np-z]{11,73})/;
 const customInspect = Symbol.for("nodejs.util.inspect.custom");
 const denoCustomInspect = Symbol.for("Deno.customInspect");
 const repeatString = Function.prototype.call.bind(String.prototype.repeat) as (
@@ -655,6 +658,13 @@ const withProtectedDetectorIntrinsics = <T>(
 
 const detector = Duckling(PIIParsers);
 const extractPii = (input: string): PIIEntity[] => detector.extract(input);
+const detectorIntrinsicsFor = (input: string): readonly ProtectedIntrinsic[] =>
+  reflectApply(regExpExec, cryptoAddressCandidate, [input]) === null
+    ? protectedDetectorIntrinsics
+    : protectedStructuredDetectorIntrinsics;
+
+const extractProtectedPii = (input: string): PIIEntity[] =>
+  withProtectedDetectorIntrinsics(() => extractPii(input), detectorIntrinsicsFor(input));
 
 const getSeen = (seen: WeakMap<object, unknown>, input: object): unknown =>
   reflectApply(weakMapGet, seen, [input]);
@@ -853,8 +863,7 @@ const shadowErrorPrototypeAdditions = (error: Error): void => {
 };
 
 /** Find PII spans in free-form text using ts-duckling. */
-export const findPii = (input: string): PIIEntity[] =>
-  withProtectedDetectorIntrinsics(() => extractPii(input), protectedStructuredDetectorIntrinsics);
+export const findPii = (input: string): PIIEntity[] => extractProtectedPii(input);
 
 const selectedEntities = (entities: PIIEntity[], kinds?: readonly PIIKind[]): PIIEntity[] => {
   if (kinds === undefined) return entities;

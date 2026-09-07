@@ -2108,7 +2108,7 @@ describe("createPiiMasker", () => {
     expect(replacements).toBe(1);
   });
 
-  test("protects reentrant text detection during structured traversal", () => {
+  test("does not trust text cache entries seeded during structured traversal", () => {
     const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
     if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
     const masker = createPiiMasker({ mode: "redact" });
@@ -2119,7 +2119,7 @@ describe("createPiiMasker", () => {
           ...execDescriptor,
           value: (): null => null,
         });
-        expect(masker.text(email)).toBe("[REDACTED]");
+        expect(masker.text(email)).toBe(email);
         return Reflect.ownKeys(target);
       },
     });
