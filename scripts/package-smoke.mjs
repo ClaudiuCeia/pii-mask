@@ -14,14 +14,30 @@ if (modes.has("pino")) {
   ]);
   const lines = [];
   const logger = pino(
-    { ...pinoPiiMasking({ mode: "redact" }), base: null, timestamp: false },
+    {
+      ...pinoPiiMasking({ mode: "redact" }),
+      base: { owner: "base@example.com" },
+      timestamp: false,
+      mixin: () => ({ requester: "mixin@example.com" }),
+      msgPrefix: "prefix@example.com ",
+      serializers: {
+        account: () => ({ email: "serializer@example.com" }),
+      },
+    },
     { write: (line) => lines.push(line) },
-  );
-  logger.info({ email: "jane@example.com" }, "Request from 192.168.0.1");
+  ).child({ client: "child@example.com" });
+  logger.setBindings({ actor: "actor@example.com" });
+  logger.info({ account: "safe", id: 9_007_199_254_740_993n }, "Request from 192.168.0.1");
+  assert.match(lines[0], /"id":9007199254740993/);
   assert.deepEqual(JSON.parse(lines[0]), {
     level: 30,
-    email: "[REDACTED]",
-    msg: "Request from [REDACTED]",
+    owner: "[REDACTED]",
+    client: "[REDACTED]",
+    actor: "[REDACTED]",
+    requester: "[REDACTED]",
+    account: { email: "[REDACTED]" },
+    id: 9_007_199_254_740_992,
+    msg: "[REDACTED] Request from [REDACTED]",
   });
 }
 

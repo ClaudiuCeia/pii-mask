@@ -141,7 +141,7 @@ try {
     await createConsumer(tarball, {
       name: "npm-pino-min",
       manager: "npm",
-      peers: ["pino@9.0.0"],
+      peers: ["pino@10.0.0"],
       modes: ["core", "pino"],
       runtimes: ["node"],
       typecheck: true,

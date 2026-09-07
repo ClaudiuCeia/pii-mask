@@ -9,6 +9,7 @@ type Comparison = Readonly<{
   baseline: number;
   candidate: number;
   changePercent: number;
+  reset: boolean;
   regressed: boolean;
 }>;
 
@@ -63,12 +64,16 @@ const comparisons: Comparison[] = candidate.results
     const baselineMedian = previous.medianNanoseconds;
     const candidateMedian = result.medianNanoseconds;
     const changePercent = ((candidateMedian - baselineMedian) / baselineMedian) * 100;
+    const reset =
+      result.name.startsWith("log/") && baseline.pinoHookLifecycle !== candidate.pinoHookLifecycle;
     return {
       name: result.name,
       baseline: baselineMedian,
       candidate: candidateMedian,
       changePercent,
+      reset,
       regressed:
+        !reset &&
         changePercent > thresholdPercent &&
         candidateMedian - baselineMedian > ABSOLUTE_FLOOR_NANOSECONDS,
     };
@@ -93,12 +98,12 @@ const rows = comparisons.map((comparison) =>
     formatTime(comparison.baseline),
     formatTime(comparison.candidate),
     formatChange(comparison.changePercent),
-    comparison.regressed ? "FAIL" : "PASS",
+    comparison.reset ? "RESET" : comparison.regressed ? "FAIL" : "PASS",
   ].join(" | "),
 );
 
 const summary = [
-  `Performance regression threshold: ${thresholdPercent}% on median time/op (1 us absolute floor; */plain reference scenarios excluded)`,
+  `Performance regression threshold: ${thresholdPercent}% on median time/op (1 us absolute floor; */plain reference scenarios excluded; changed Pino hook lifecycles reset log scenarios)`,
   "",
   "Benchmark | Baseline (median) | Candidate (median) | Change | Status",
   "--- | ---: | ---: | ---: | :---:",

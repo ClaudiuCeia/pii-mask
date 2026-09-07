@@ -43,7 +43,7 @@ const parseCli = (args: readonly string[]): CliOptions => {
 
 type PinoHookModule = Readonly<{
   pinoPiiMasking(options?: Record<string, unknown>): {
-    hooks: { logMethod(args: unknown[], method: unknown, level: number): void };
+    hooks: Readonly<Record<string, unknown>>;
   };
 }>;
 
@@ -87,7 +87,9 @@ const requestError = new Error("Request for jane@example.com failed from 192.168
 const sinkWriter = { write: (_chunk: string) => {} };
 const loggerOptions = { base: null, timestamp: false, level: "info" };
 const plainLogger = pino(loggerOptions, sinkWriter);
-const protectedLogger = pino({ ...loggerOptions, ...pinoPiiMasking() }, sinkWriter);
+const pinoMasking = pinoPiiMasking();
+const pinoHookLifecycle = "streamWrite" in pinoMasking.hooks ? "streamWrite" : "logMethod";
+const protectedLogger = pino({ ...loggerOptions, ...pinoMasking }, sinkWriter);
 
 const smallPayload = { reqId: "req_9f2c7a", durationMs: 13, status: 200 };
 const mediumPayload = {
@@ -185,6 +187,7 @@ const report: BenchmarkReport = {
   runtime: `Bun ${Bun.version}`,
   platform: process.platform,
   architecture: process.arch,
+  pinoHookLifecycle,
   generatedAt: new Date().toISOString(),
   results,
 };
