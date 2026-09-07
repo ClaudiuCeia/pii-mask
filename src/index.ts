@@ -3,8 +3,8 @@
  *
  * Uses {@link findPii} to locate sensitive spans via ts-duckling, then
  * replaces them with masked (`***`) or redacted (`[REDACTED]`) values.
- * Structured-value traversal handles plain objects, arrays, and Errors
- * without mutation.
+ * Structured-value traversal copies data without retaining unsafe prototypes
+ * or serialization hooks and without mutating the input.
  *
  * @module
  */
@@ -54,17 +54,17 @@ export type PiiMaskerOptions =
 export interface PiiMasker {
   /** Protect PII in one string. */
   text(input: string): string;
-  /** Protect every string in a plain object, array, or Error without mutating it. */
+  /** Protect strings in structured data without mutating the input. */
   value<T>(input: T): ProtectedValue<T>;
 }
 
 /** Result type for a value copied through a PII transformation. */
 export type ProtectedValue<T> = T extends string
   ? string
-  : T extends Error
-    ? Error
-    : T extends (...arguments_: never[]) => unknown
-      ? T
+  : T extends InstanceType<StringConstructor>
+    ? string
+    : T extends Error
+      ? Error
       : T extends readonly unknown[]
         ? number extends T["length"]
           ? T extends unknown[]
@@ -157,27 +157,55 @@ const isPlainObject = (value: object): boolean => {
   return prototype === Object.prototype || prototype === null;
 };
 
+const unboxString = (value: object): string | undefined => {
+  try {
+    const unboxed: unknown = Reflect.apply(String.prototype.valueOf, value, []);
+    return typeof unboxed === "string" ? unboxed : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const transformError = (
   error: Error,
   transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
 ): Error => {
-  const transformed = new Error(transform(error.message));
-  Object.setPrototypeOf(transformed, Object.getPrototypeOf(error));
-  transformed.name = error.name;
-  if (error.stack !== undefined) transformed.stack = transform(error.stack);
+  const messageDescriptor = Object.getOwnPropertyDescriptor(error, "message");
+  const message =
+    messageDescriptor && "value" in messageDescriptor && typeof messageDescriptor.value === "string"
+      ? messageDescriptor.value
+      : "";
+  const transformed = new Error(transform(message));
   seen.set(error, transformed);
 
-  if ("cause" in error) {
+  const nameDescriptor = Object.getOwnPropertyDescriptor(error, "name");
+  if (nameDescriptor && "value" in nameDescriptor && typeof nameDescriptor.value === "string") {
+    transformed.name = transform(nameDescriptor.value);
+  }
+
+  const stackDescriptor = Object.getOwnPropertyDescriptor(error, "stack");
+  if (stackDescriptor && "value" in stackDescriptor && typeof stackDescriptor.value === "string") {
+    transformed.stack = transform(stackDescriptor.value);
+  }
+
+  const causeDescriptor = Object.getOwnPropertyDescriptor(error, "cause");
+  if (causeDescriptor && "value" in causeDescriptor) {
     Object.defineProperty(transformed, "cause", {
       configurable: true,
       writable: true,
-      value: transformValue(error.cause, transform, seen),
+      value: transformValue(causeDescriptor.value, transform, seen),
     });
   }
 
   for (const key of Reflect.ownKeys(error)) {
-    if (key === "name" || key === "message" || key === "stack" || key === "cause") {
+    if (
+      key === "name" ||
+      key === "message" ||
+      key === "stack" ||
+      key === "cause" ||
+      key === "toJSON"
+    ) {
       continue;
     }
     const descriptor = Object.getOwnPropertyDescriptor(error, key);
@@ -198,10 +226,13 @@ const transformValue = (
   seen: WeakMap<object, unknown>,
 ): unknown => {
   if (typeof input === "string") return transform(input);
-  if (typeof input !== "object" || input === null) return input;
+  if ((typeof input !== "object" && typeof input !== "function") || input === null) return input;
 
   const existing = seen.get(input);
   if (existing !== undefined) return existing;
+
+  const boxedString = unboxString(input);
+  if (boxedString !== undefined) return transform(boxedString);
 
   if (input instanceof Error) return transformError(input, transform, seen);
 
@@ -212,11 +243,12 @@ const transformValue = (
     return result;
   }
 
-  if (!isPlainObject(input)) return input;
-
-  const result = Object.create(Object.getPrototypeOf(input)) as Record<PropertyKey, unknown>;
+  const result = Object.create(
+    isPlainObject(input) ? Object.getPrototypeOf(input) : null,
+  ) as Record<PropertyKey, unknown>;
   seen.set(input, result);
   for (const key of Reflect.ownKeys(input)) {
+    if (key === "toJSON") continue;
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
     if (descriptor?.enumerable && "value" in descriptor) {
       Object.defineProperty(result, key, {
@@ -231,11 +263,11 @@ const transformValue = (
 const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> =>
   transformValue(input, transform, new WeakMap()) as ProtectedValue<T>;
 
-/** Mask every string nested in a plain object, array, or Error. */
+/** Mask strings nested in structured data. */
 export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => maskText(value, options));
 
-/** Redact every string nested in a plain object, array, or Error. */
+/** Redact strings nested in structured data. */
 export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => redactText(value, options));
 

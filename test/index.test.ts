@@ -113,9 +113,134 @@ describe("structured values", () => {
     expect((result as Error & { account: string }).account).toBe("[REDACTED]");
   });
 
-  test("leaves non-plain values intact", () => {
-    const date = new Date();
-    expect(maskValue({ date }).date).toBe(date);
+  test("normalizes unsupported built-ins without retaining serialization hooks", () => {
+    const date = Object.assign(new Date("2026-09-07T00:00:00.000Z"), {
+      email: "jane@example.com",
+    });
+    Object.defineProperty(date, "toJSON", {
+      enumerable: true,
+      value: () => "serializer@example.com",
+    });
+
+    const result = redactValue(date);
+
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(result.email).toBe("[REDACTED]");
+    expect(Reflect.ownKeys(result)).toEqual(["email"]);
+    expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
+  });
+
+  test("protects boxed strings as one value", () => {
+    const result = redactValue(new String("jane@example.com"));
+    const typedResult: string = result;
+
+    expect(typedResult).toBe("[REDACTED]");
+    expect(result).toBe("[REDACTED]");
+  });
+
+  test("normalizes callable serializers", () => {
+    const serializer = (): string => "ignored";
+    serializer.toJSON = (): string => "serializer@example.com";
+
+    const result = redactValue({ serializer });
+    const protectedSerializer: unknown = Reflect.get(result, "serializer");
+    if (typeof protectedSerializer !== "object" || protectedSerializer === null) {
+      throw new Error("Expected the callable to become an object");
+    }
+
+    expect(Object.getPrototypeOf(protectedSerializer)).toBeNull();
+    expect(Reflect.has(protectedSerializer, "toJSON")).toBe(false);
+    expect(JSON.stringify(result)).toBe('{"serializer":{}}');
+  });
+
+  test("protects enumerable data properties on class instances", () => {
+    class Account {
+      email = "jane@example.com";
+      self: Account | undefined;
+
+      toJSON = (): Readonly<{ leaked: string }> => ({ leaked: "serializer@example.com" });
+    }
+
+    const input = new Account();
+    input.self = input;
+    const result = redactValue(input);
+
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(result.email).toBe("[REDACTED]");
+    expect(result.self).toBe(result);
+    expect(Reflect.has(result, "toJSON")).toBe(false);
+    expect(Reflect.ownKeys(result)).toEqual(["email", "self"]);
+  });
+
+  test("does not invoke or retain accessors from class instances", () => {
+    let reads = 0;
+    class Account {
+      get email(): string {
+        reads += 1;
+        throw new Error("Accessor must not run");
+      }
+    }
+
+    const result = redactValue(new Account());
+
+    expect(reads).toBe(0);
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(Reflect.has(result, "email")).toBe(false);
+  });
+
+  test("does not preserve custom subclasses of retained built-ins", () => {
+    class AccountDate extends Date {
+      email = "jane@example.com";
+
+      override toJSON(): string {
+        return "serializer@example.com";
+      }
+    }
+
+    const result = redactValue(new AccountDate("2026-09-07T00:00:00.000Z"));
+
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(result.email).toBe("[REDACTED]");
+    expect(Reflect.has(result, "toJSON")).toBe(false);
+  });
+
+  test("normalizes custom errors and protects their names", () => {
+    class AccountError extends Error {
+      toJSON(): Readonly<{ email: string }> {
+        return { email: "serializer@example.com" };
+      }
+    }
+
+    const input = new AccountError("Request for jane@example.com failed");
+    input.name = "jane@example.com";
+    const result = redactValue(input);
+
+    expect(Object.getPrototypeOf(result)).toBe(Error.prototype);
+    expect(result.name).toBe("[REDACTED]");
+    expect(result.message).toBe("Request for [REDACTED] failed");
+    expect(Reflect.has(result, "toJSON")).toBe(false);
+  });
+
+  test("does not invoke inherited error accessors", () => {
+    let reads = 0;
+    class AccountError extends Error {
+      override get name(): string {
+        reads += 1;
+        throw new Error("Accessor must not run");
+      }
+
+      override get message(): string {
+        reads += 1;
+        throw new Error("Accessor must not run");
+      }
+    }
+
+    const input = new AccountError();
+    const result = redactValue(input);
+
+    expect(reads).toBe(0);
+    expect(result.name).toBe("Error");
+    expect(result.message).toBe("");
   });
 });
 

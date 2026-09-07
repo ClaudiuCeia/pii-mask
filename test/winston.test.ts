@@ -19,4 +19,35 @@ describe("winstonPiiMasking", () => {
     expect(entries[0]?.message).toBe("Email [REDACTED]");
     expect(entries[0]?.ip).toBe("[REDACTED]");
   });
+
+  test("protects metadata stored in class instances", () => {
+    class Account {
+      email = "jane@example.com";
+
+      toJSON = (): Readonly<{ email: string }> => ({ email: "serializer@example.com" });
+    }
+
+    const entries: string[] = [];
+    const capture = winston.format((info) => {
+      const message: unknown = info[Symbol.for("message")];
+      if (typeof message === "string") entries.push(message);
+      return info;
+    });
+    const logger = winston.createLogger({
+      format: winston.format.combine(
+        winstonPiiMasking({ mode: "redact" }),
+        winston.format.json(),
+        capture(),
+      ),
+      transports: [new winston.transports.Console({ silent: true })],
+    });
+
+    logger.info("Account", { account: new Account() });
+
+    expect(JSON.parse(entries[0] ?? "{}")).toEqual({
+      level: "info",
+      message: "Account",
+      account: { email: "[REDACTED]" },
+    });
+  });
 });
