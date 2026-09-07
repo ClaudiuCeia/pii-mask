@@ -138,6 +138,19 @@ describe("pinoPiiMasking", () => {
     );
   });
 
+  test("preserves valid JSON grammar while protecting nested strings", () => {
+    const streamWrite = pinoPiiMasking({ mode: "redact" }).hooks?.streamWrite;
+    if (streamWrite === undefined) throw new Error("Pino masking stream hook is missing");
+
+    expect(
+      streamWrite(
+        '{"empty":{},"values":[true,false,null,-0,1.25e+2,"user@example.com"],"escaped":"line\\nvalue"}\n',
+      ),
+    ).toBe(
+      '{"empty":{},"values":[true,false,null,-0,1.25e+2,"[REDACTED]"],"escaped":"line\\nvalue"}\n',
+    );
+  });
+
   test("fails closed when the stream hook receives invalid JSON", () => {
     const streamWrite = pinoPiiMasking().hooks?.streamWrite;
     if (streamWrite === undefined) throw new Error("Pino masking stream hook is missing");
@@ -146,6 +159,10 @@ describe("pinoPiiMasking", () => {
       '{"message":"user@example.com}',
       '{"message":user@example.com}',
       '{"message":"user@example.com",}',
+      '{"message":"user@example.com" "status":200}',
+      '{"values":["user@example.com",]}',
+      '{"value":01}',
+      '{"value":1.}',
       '{"user\\x@example.com":"safe"}',
       '"user@example.com"',
     ];
