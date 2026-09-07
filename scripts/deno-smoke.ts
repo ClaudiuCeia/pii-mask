@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import pino from "pino";
 import winston from "winston";
-import { findPii, maskText, maskValue, redactText, redactValue } from "../src/index.ts";
+import {
+  createPiiMasker,
+  findPii,
+  maskText,
+  maskValue,
+  redactText,
+  redactValue,
+} from "../src/index.ts";
 import { pinoPiiMasking } from "../src/pino.ts";
 import { winstonPiiMasking } from "../src/winston.ts";
 
@@ -25,6 +32,21 @@ deno.test("detects PII entities", () => {
 deno.test("protects structured data", () => {
   assert.equal(maskValue({ message: "Email jane@example.com" }).message, "Email ****************");
   assert.equal(redactValue({ message: "Email jane@example.com" }).message, "Email [REDACTED]");
+});
+
+deno.test("does not cache repeated strings by default", () => {
+  let replacements = 0;
+  const protector = createPiiMasker({
+    mode: "redact",
+    replacement: () => {
+      replacements += 1;
+      return "<pii>";
+    },
+  });
+
+  assert.equal(protector.text("jane@example.com"), "<pii>");
+  assert.equal(protector.text("jane@example.com"), "<pii>");
+  assert.equal(replacements, 2);
 });
 
 deno.test("integrates with Pino", () => {

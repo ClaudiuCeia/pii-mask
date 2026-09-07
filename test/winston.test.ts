@@ -20,6 +20,25 @@ describe("winstonPiiMasking", () => {
     expect(entries[0]?.ip).toBe("[REDACTED]");
   });
 
+  test("does not cache repeated entry strings by default", () => {
+    let replacements = 0;
+    const logger = winston.createLogger({
+      format: winstonPiiMasking({
+        mode: "redact",
+        replacement: () => {
+          replacements += 1;
+          return "<pii>";
+        },
+      }),
+      transports: [new winston.transports.Console({ silent: true })],
+    });
+
+    logger.info("Email jane@example.com");
+    logger.info("Email jane@example.com");
+
+    expect(replacements).toBe(2);
+  });
+
   test("protects metadata stored in class instances", () => {
     class Account {
       email = "jane@example.com";

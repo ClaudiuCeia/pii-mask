@@ -1,11 +1,23 @@
 import assert from "node:assert/strict";
 
-import { maskText, redactText } from "@claudiu-ceia/pii-mask";
+import { createPiiMasker, maskText, redactText } from "@claudiu-ceia/pii-mask";
 
 const modes = new Set(process.argv.slice(2));
 
 assert.equal(maskText("Email jane@example.com"), "Email ****************");
 assert.equal(redactText("IP 192.168.0.1"), "IP [REDACTED]");
+
+let replacements = 0;
+const protector = createPiiMasker({
+  mode: "redact",
+  replacement: () => {
+    replacements += 1;
+    return "<pii>";
+  },
+});
+assert.equal(protector.text("jane@example.com"), "<pii>");
+assert.equal(protector.text("jane@example.com"), "<pii>");
+assert.equal(replacements, 2);
 
 if (modes.has("pino")) {
   const [{ default: pino }, { pinoPiiMasking }] = await Promise.all([

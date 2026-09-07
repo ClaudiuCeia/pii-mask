@@ -35,17 +35,17 @@ export interface RedactOptions extends PIISelectionOptions {
   replacement?: string | ((entity: PIIEntity) => string);
 }
 
-/** Options for the LRU cache on {@link createPiiMasker}. */
+/** Options for the optional LRU cache on {@link createPiiMasker}. */
 export interface PiiMaskerCacheOptions {
   /**
    * Bound for the LRU cache of already-transformed strings. Each entry retains
-   * the original input string and its transformed result. Set to `0` to
-   * disable. Defaults to `1024`.
+   * the original input string and its transformed result. A positive value
+   * enables the cache. Defaults to `0`.
    */
   cacheSize?: number;
 }
 
-/** Configuration for {@link createPiiMasker}. Defaults to mask mode with caching enabled. */
+/** Configuration for {@link createPiiMasker}. Defaults to mask mode without caching. */
 export type PiiMaskerOptions =
   | ({ mode?: "mask" } & MaskOptions & PiiMaskerCacheOptions)
   | ({ mode: "redact" } & RedactOptions & PiiMaskerCacheOptions);
@@ -417,7 +417,7 @@ export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValu
 export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => redactText(value, options));
 
-const DEFAULT_CACHE_SIZE = 1024;
+const DEFAULT_CACHE_SIZE = 0;
 
 const withCache = (
   transform: (input: string) => string,
