@@ -50,4 +50,31 @@ describe("winstonPiiMasking", () => {
       account: { email: "[REDACTED]" },
     });
   });
+
+  test("preserves entries with accessor-backed required fields", () => {
+    const entries: Record<PropertyKey, unknown>[] = [];
+    const accessors = winston.format((info) => {
+      const { level, message } = info;
+      Object.defineProperties(info, {
+        level: { configurable: true, get: () => level },
+        message: { configurable: true, get: () => message },
+      });
+      return info;
+    });
+    const capture = winston.format((info) => {
+      entries.push(info);
+      return info;
+    });
+    const logger = winston.createLogger({
+      format: winston.format.combine(accessors(), winstonPiiMasking({ mode: "redact" }), capture()),
+      transports: [new winston.transports.Console({ silent: true })],
+    });
+
+    logger.info("Email jane@example.com", { ip: "192.168.0.1" });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.message).toBe("Email [REDACTED]");
+    expect(entries[0]?.level).toBe("info");
+    expect(entries[0]?.ip).toBe("[REDACTED]");
+  });
 });
