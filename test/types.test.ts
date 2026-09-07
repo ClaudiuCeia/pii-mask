@@ -137,6 +137,17 @@ test("transformed value types omit augmented tuple properties", () => {
   expect(Reflect.has(result, "tag")).toBeFalse();
 });
 
+test("transformed value types preserve tuple indices with iterator overrides", () => {
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
+    [Symbol.iterator]: () => [][Symbol.iterator](),
+  });
+  const result = redactValue(input);
+  const first: string = result[0];
+
+  expect(first).toBe("[REDACTED]");
+  expect(result).toEqual(["[REDACTED]"]);
+});
+
 test("transformed value types preserve optional tuple positions", () => {
   const input: readonly ["jane@example.com"?] = ["jane@example.com"];
   const result = redactValue(input);

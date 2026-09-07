@@ -241,7 +241,9 @@ const transformValue = (
   if (Array.isArray(input)) {
     const result: unknown[] = [];
     seen.set(input, result);
-    for (const item of input) result.push(transformValue(item, transform, seen));
+    for (let index = 0; index < input.length; index += 1) {
+      result.push(transformValue(input[index], transform, seen));
+    }
     return result;
   }
 
