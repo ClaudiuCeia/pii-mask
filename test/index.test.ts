@@ -77,6 +77,21 @@ describe("redactText", () => {
       }),
     ).toBe("Email [REDACTED:email] from [REDACTED:ip]");
   });
+
+  test("invokes replacement callbacks without an options receiver", () => {
+    let called = false;
+
+    const result = redactText("Email jane@example.com", {
+      replacement: function (this: void): string {
+        expect(this).toBeUndefined();
+        called = true;
+        return "[REDACTED]";
+      },
+    });
+
+    expect(result).toBe("Email [REDACTED]");
+    expect(called).toBeTrue();
+  });
 });
 
 describe("structured values", () => {
@@ -871,6 +886,29 @@ describe("structured values", () => {
     expect(result.email).toBe("[REDACTED]");
   });
 
+  test("snapshots redaction options before proxy traversal", () => {
+    const email = "jane@example.com";
+    const options: { kinds: PIIKind[]; replacement: string } = {
+      kinds: ["email"],
+      replacement: "[REDACTED]",
+    };
+    const input = new Proxy(
+      { email },
+      {
+        ownKeys: (target) => {
+          options.kinds.length = 0;
+          options.replacement = email;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    const result = redactValue(input, options);
+
+    requireObjectProjection(result);
+    expect(result.email).toBe("[REDACTED]");
+  });
+
   test("protects detector numeric dependencies after proxy traversal", () => {
     const numberDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Number");
     if (numberDescriptor === undefined) throw new Error("Global Number descriptor is missing");
@@ -1170,7 +1208,9 @@ describe("structured values", () => {
 
     try {
       const result = redactValue(input);
-      expect(inspect(result)).toBe("[ '[REDACTED]' ]");
+      const rendered = inspect(result);
+      expect(rendered).toContain("[REDACTED]");
+      expect(rendered).not.toContain("jane@example.com");
     } finally {
       if (inspectDescriptor === undefined) {
         Reflect.deleteProperty(Array.prototype, inspectKey);
@@ -1321,6 +1361,144 @@ describe("structured values", () => {
     expect(iteratedEntries).toEqual([[0, "[REDACTED]"]]);
     expect(iteratedKeys).toEqual([0]);
     expect(iteratedValues).toEqual(["[REDACTED]"]);
+  });
+
+  test("does not inherit array methods installed during projection", () => {
+    const mapDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "map");
+    if (mapDescriptor === undefined) throw new Error("Array map descriptor is missing");
+    const target = ["jane@example.com"];
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        Object.defineProperty(Array.prototype, "map", {
+          ...mapDescriptor,
+          value: (): string[] => [value[0] ?? ""],
+        });
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    let mapped: string[] = [];
+    let inheritsNativeArrayPrototype = true;
+    try {
+      const result = redactValue(input);
+      if (!Array.isArray(result)) throw new Error("Expected a protected array");
+      inheritsNativeArrayPrototype = result instanceof Array;
+      mapped = result.map((value) => value).map((value) => value);
+    } finally {
+      Object.defineProperty(Array.prototype, "map", mapDescriptor);
+    }
+
+    expect(inheritsNativeArrayPrototype).toBeFalse();
+    expect(mapped).toEqual(["[REDACTED]"]);
+  });
+
+  test("does not inherit protocol hooks installed during projection", async () => {
+    const thenDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "then");
+    const target = ["jane@example.com"];
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        // oxlint-disable-next-line unicorn/no-thenable -- This regression deliberately installs a hostile thenable hook.
+        Object.defineProperty(Array.prototype, "then", {
+          configurable: true,
+          value: (resolve: (value: string) => void): void => resolve(value[0] ?? ""),
+        });
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    let resolved: unknown;
+    try {
+      const result = redactValue(input);
+      resolved = await Promise.resolve(result);
+    } finally {
+      if (thenDescriptor === undefined) Reflect.deleteProperty(Array.prototype, "then");
+      // oxlint-disable-next-line unicorn/no-thenable -- Restore a pre-existing descriptor exactly.
+      else Object.defineProperty(Array.prototype, "then", thenDescriptor);
+    }
+
+    expect(resolved).toEqual(["[REDACTED]"]);
+  });
+
+  test("protects arrays returned by change-by-copy methods", () => {
+    const inspectKey = Symbol.for("nodejs.util.inspect.custom");
+    const inspectDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, inspectKey);
+    const target = [{ email: "jane@example.com" }];
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        Object.defineProperty(Array.prototype, inspectKey, {
+          configurable: true,
+          value: () => value[0],
+        });
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (!Array.isArray(result)) throw new Error("Expected a protected array");
+      const copied = result.toReversed().toReversed();
+      expect(String(copied)).toBe("[object Object]");
+      expect(inspect(copied)).not.toContain("jane@example.com");
+      expect(copied instanceof Array).toBeFalse();
+    } finally {
+      if (inspectDescriptor === undefined) Reflect.deleteProperty(Array.prototype, inspectKey);
+      else Object.defineProperty(Array.prototype, inspectKey, inspectDescriptor);
+    }
+  });
+
+  test("stringifies projected object elements without invoking missing hooks", () => {
+    const result = redactValue([{ email: "jane@example.com" }]);
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
+
+    expect(result.toString()).toBe("[object Object]");
+    expect(String(result)).toBe("[object Object]");
+    expect(result.join(" | ")).toBe("[object Object]");
+    expect(result.toLocaleString()).toBe("[object Object]");
+    expect(String(result.map((value) => value))).toBe("[object Object]");
+  });
+
+  test("preserves array join coercion order and symbol errors", () => {
+    const result = redactValue([1, 2]);
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
+    const separator = {
+      toString: (): string => {
+        result.length = 0;
+        return "|";
+      },
+    };
+
+    const join = result.join;
+    if (typeof join !== "function") throw new Error("Expected a protected join method");
+    expect(Reflect.apply(join, result, [separator])).toBe("|");
+    const symbolResult = redactValue([1, 2]);
+    const symbolJoin = symbolResult.join;
+    if (typeof symbolJoin !== "function") throw new Error("Expected a protected join method");
+    expect(() => Reflect.apply(symbolJoin, symbolResult, [Symbol("separator")])).toThrow(TypeError);
+  });
+
+  test("preserves locale formatting for projected array primitives", () => {
+    const result = redactValue([1234.5, 1234n, Symbol("safe")]);
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
+
+    expect(result.toLocaleString("de-DE")).toBe("1.234,5,1.234,Symbol(safe)");
+  });
+
+  test("stringifies and inspects circular projected arrays", () => {
+    const input: unknown[] = [];
+    input[0] = input;
+
+    const result = redactValue(input);
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
+
+    expect(String(result)).toBe("");
+    expect(inspect(result)).toContain("[Circular");
+  });
+
+  test("preserves native symbol stringification errors", () => {
+    const result = redactValue([Symbol("jane@example.com")]);
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
+
+    expect(() => String(result)).toThrow(TypeError);
   });
 
   test("does not use poisoned array iteration while projecting Error keys", () => {

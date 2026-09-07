@@ -278,6 +278,7 @@ interface ProtectedIntrinsic {
 }
 
 const NativeArray = Array;
+const NativeBigInt = BigInt;
 const NativeDataView = DataView;
 const NativeError = Error;
 const NativeMap = Map;
@@ -293,13 +294,16 @@ const arrayIterator = NativeArray.prototype[Symbol.iterator];
 const arrayKeys = NativeArray.prototype.keys;
 const arrayJoin = NativeArray.prototype.join;
 const arraySort = NativeArray.prototype.sort;
+const arrayToLocaleString = NativeArray.prototype.toLocaleString;
 const arrayValues = NativeArray.prototype.values;
 const arrayIsArray = NativeArray.isArray;
+const bigIntToLocaleString = NativeBigInt.prototype.toLocaleString;
 const createObject = Object.create;
 const defineProperties = Object.defineProperties;
 const defineProperty = Object.defineProperty;
 const errorIsError = NativeError.isError;
 const errorToString = NativeError.prototype.toString;
+const freezeObject = Object.freeze;
 const functionBind = Function.prototype.bind;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const getPrototypeOf = Object.getPrototypeOf;
@@ -312,6 +316,7 @@ const mapIteratorNext = getPrototypeOf(new NativeMap().keys())
 const mapKeys = NativeMap.prototype.keys;
 const mapSet = NativeMap.prototype.set;
 const mathMin = Math.min;
+const numberToLocaleString = NativeNumber.prototype.toLocaleString;
 const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
@@ -319,6 +324,7 @@ const reflectDeleteProperty = Reflect.deleteProperty;
 const setAdd = NativeSet.prototype.add;
 const setDelete = NativeSet.prototype.delete;
 const setHas = NativeSet.prototype.has;
+const stringConcat = NativeString.prototype.concat;
 const textEncoderDescriptor = getOwnPropertyDescriptor(globalThis, "TextEncoder");
 const NativeTextEncoderPrototype = (() => {
   if (textEncoderDescriptor === undefined) return undefined;
@@ -602,8 +608,107 @@ const safeValueOf = function (this: unknown): unknown {
   return this;
 };
 
+const stringifyProjectedArray = (
+  values: unknown[],
+  seen: Set<object>,
+  separator = ",",
+  length = values.length,
+): string => {
+  if (reflectApply(setHas, seen, [values])) return "";
+  reflectApply(setAdd, seen, [values]);
+  let result = "";
+  try {
+    for (let index = 0; index < length; index += 1) {
+      if (index > 0) result += separator;
+      const descriptor = getOwnDataDescriptor(values, index);
+      const value = descriptor?.value;
+      if (value === undefined || value === null) continue;
+      if (arrayIsArray(value)) {
+        result += stringifyProjectedArray(value, seen);
+      } else if (typeof value === "object") {
+        const valueToString = getOwnDataDescriptor(value, "toString")?.value;
+        result +=
+          valueToString === safeErrorToString
+            ? (reflectApply(safeErrorToString, value, []) as string)
+            : "[object Object]";
+      } else if (typeof value === "symbol") {
+        throw new TypeError("Cannot convert a Symbol value to a string");
+      } else {
+        result += NativeString(value);
+      }
+    }
+    return result;
+  } finally {
+    reflectApply(setDelete, seen, [values]);
+  }
+};
+
+const safeArrayJoin = function (this: unknown, separator?: unknown): string {
+  if (!arrayIsArray(this)) return reflectApply(arrayJoin, this, [separator]) as string;
+  const length = this.length;
+  const resolvedSeparator =
+    separator === undefined ? "," : (reflectApply(stringConcat, "", [separator]) as string);
+  return stringifyProjectedArray(this, new NativeSet(), resolvedSeparator, length);
+};
+
 const safeArrayToString = function (this: unknown): string {
-  return reflectApply(arrayJoin, this, [","]) as string;
+  if (!arrayIsArray(this)) return reflectApply(arrayJoin, this, [","]) as string;
+  return stringifyProjectedArray(this, new NativeSet());
+};
+
+const localeStringForProjectedValue = (
+  value: unknown,
+  seen: Set<object>,
+  locales: unknown,
+  options: unknown,
+): string => {
+  if (arrayIsArray(value)) return stringifyProjectedArrayLocale(value, seen, locales, options);
+  if (typeof value === "number") {
+    return reflectApply(numberToLocaleString, value, [locales, options]) as string;
+  }
+  if (typeof value === "bigint") {
+    return reflectApply(bigIntToLocaleString, value, [locales, options]) as string;
+  }
+  if (value !== null && typeof value === "object") {
+    return getOwnDataDescriptor(value, "toString")?.value === safeErrorToString
+      ? (reflectApply(safeErrorToString, value, []) as string)
+      : "[object Object]";
+  }
+  return NativeString(value);
+};
+
+const stringifyProjectedArrayLocale = (
+  values: unknown[],
+  seen: Set<object>,
+  locales: unknown,
+  options: unknown,
+): string => {
+  if (reflectApply(setHas, seen, [values])) return "";
+  reflectApply(setAdd, seen, [values]);
+  const length = values.length;
+  let result = "";
+  try {
+    for (let index = 0; index < length; index += 1) {
+      if (index > 0) result += ",";
+      const value = getOwnDataDescriptor(values, index)?.value;
+      if (value === undefined || value === null) continue;
+      result += localeStringForProjectedValue(value, seen, locales, options);
+    }
+    return result;
+  } finally {
+    reflectApply(setDelete, seen, [values]);
+  }
+};
+
+const safeArrayToLocaleString = function (
+  this: unknown,
+  locales?: unknown,
+  options?: unknown,
+): string {
+  if (!arrayIsArray(this)) {
+    return reflectApply(arrayToLocaleString, this, [locales, options]) as string;
+  }
+  return stringifyProjectedArrayLocale(this, new NativeSet(), locales, options);
 };
 
 const safeErrorToString = function (this: unknown): string {
@@ -678,8 +783,29 @@ const naturalNumber = (name: string, value: number | undefined): number => {
 interface ResolvedMaskOptions {
   readonly keepEnd: number;
   readonly keepStart: number;
+  readonly kinds: readonly PIIKind[] | undefined;
   readonly mask: string;
 }
+
+interface ResolvedRedactOptions {
+  readonly kinds: readonly PIIKind[] | undefined;
+  readonly replacement: string | ((entity: PIIEntity) => string);
+}
+
+const snapshotKinds = (kinds: readonly PIIKind[] | undefined): readonly PIIKind[] | undefined => {
+  if (kinds === undefined) return undefined;
+  const result: PIIKind[] = [];
+  const length = kinds.length;
+  for (let index = 0; index < length; index += 1) {
+    defineProperty(result, index, {
+      configurable: true,
+      enumerable: true,
+      value: kinds[index],
+      writable: true,
+    });
+  }
+  return result;
+};
 
 const resolveMaskOptions = (options: MaskOptions): ResolvedMaskOptions => {
   const mask = options.mask ?? "*";
@@ -687,17 +813,22 @@ const resolveMaskOptions = (options: MaskOptions): ResolvedMaskOptions => {
   return {
     keepEnd: naturalNumber("keepEnd", options.keepEnd),
     keepStart: naturalNumber("keepStart", options.keepStart),
+    kinds: snapshotKinds(options.kinds),
     mask,
   };
 };
 
+const resolveRedactOptions = (options: RedactOptions): ResolvedRedactOptions => ({
+  kinds: snapshotKinds(options.kinds),
+  replacement: options.replacement ?? "[REDACTED]",
+});
+
 const maskDetectedText = (
   input: string,
   entities: PIIEntity[],
-  kinds: readonly PIIKind[] | undefined,
   options: ResolvedMaskOptions,
 ): string => {
-  const selected = selectedEntities(entities, kinds);
+  const selected = selectedEntities(entities, options.kinds);
   return replaceEntities(input, selected, (entity) => {
     const length = entity.end - entity.start;
     const visibleStart = mathMin(options.keepStart, length);
@@ -713,15 +844,15 @@ const maskDetectedText = (
 /** Mask detected PII while optionally preserving leading or trailing characters. */
 export const maskText = (input: string, options: MaskOptions = {}): string => {
   const resolved = resolveMaskOptions(options);
-  return maskDetectedText(input, findPii(input), options.kinds, resolved);
+  return maskDetectedText(input, findPii(input), resolved);
 };
 
 const redactDetectedText = (
   input: string,
   entities: PIIEntity[],
-  options: RedactOptions,
+  options: ResolvedRedactOptions,
 ): string => {
-  const replacement = options.replacement ?? "[REDACTED]";
+  const replacement = options.replacement;
   const selected = selectedEntities(entities, options.kinds);
   return replaceEntities(input, selected, (entity) =>
     typeof replacement === "function" ? replacement(entity) : replacement,
@@ -730,7 +861,7 @@ const redactDetectedText = (
 
 /** Replace each detected PII span with a fixed or entity-aware value. */
 export const redactText = (input: string, options: RedactOptions = {}): string =>
-  redactDetectedText(input, findPii(input), options);
+  redactDetectedText(input, findPii(input), resolveRedactOptions(options));
 
 const unboxString = (value: object): string | undefined => {
   try {
@@ -1088,6 +1219,85 @@ const safeArrayValues = function (this: unknown): ArrayIterator<unknown> {
   return createArrayIterator(this, arrayValues);
 };
 
+function SafeArraySpecies(length = 0): unknown[] {
+  return createProtectedArray(length);
+}
+
+const safeArrayConstructor = createObject(null) as object;
+defineProperty(safeArrayConstructor, Symbol.species, {
+  value: freezeObject(SafeArraySpecies),
+});
+freezeObject(safeArrayConstructor);
+
+const createSafeArrayCopyMethod = (key: PropertyKey): unknown => {
+  const method = getOwnDataDescriptor(NativeArray.prototype, key)?.value;
+  if (typeof method !== "function") return undefined;
+  return function (this: unknown, ...args: unknown[]): unknown {
+    const result = reflectApply(method, this, args);
+    if (arrayIsArray(result)) setPrototypeOf(result, safeArrayPrototype);
+    return result;
+  };
+};
+
+const safeArrayCopyMethods = {
+  toReversed: createSafeArrayCopyMethod("toReversed"),
+  toSorted: createSafeArrayCopyMethod("toSorted"),
+  toSpliced: createSafeArrayCopyMethod("toSpliced"),
+  with: createSafeArrayCopyMethod("with"),
+};
+
+const safeArrayPrototype = (() => {
+  const result = createObject(null) as object;
+  const sources = [NativeObjectPrototype, NativeArray.prototype];
+  for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    const source = sources[sourceIndex];
+    if (source === undefined) continue;
+    const keys = ownKeys(source);
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+      const key = keys[keyIndex];
+      if (key === undefined) continue;
+      const descriptor = getOwnPropertyDescriptor(source, key);
+      if (descriptor === undefined) continue;
+      defineProperty(result, key, descriptor);
+    }
+  }
+  defineProperties(result, {
+    constructor: { configurable: true, value: safeArrayConstructor, writable: true },
+    entries: { configurable: true, value: safeArrayEntries, writable: true },
+    join: { configurable: true, value: safeArrayJoin, writable: true },
+    keys: { configurable: true, value: safeArrayKeys, writable: true },
+    toJSON: { configurable: true, value: undefined, writable: true },
+    toLocaleString: { configurable: true, value: safeArrayToLocaleString, writable: true },
+    toString: { configurable: true, value: safeArrayToString, writable: true },
+    valueOf: { configurable: true, value: safeValueOf, writable: true },
+    values: { configurable: true, value: safeArrayValues, writable: true },
+    [Symbol.iterator]: { configurable: true, value: safeArrayValues, writable: true },
+    [Symbol.toPrimitive]: { configurable: true, value: undefined, writable: true },
+    [Symbol.toStringTag]: { configurable: true, value: undefined, writable: true },
+    [customInspect]: { configurable: true, value: undefined, writable: true },
+    [denoCustomInspect]: { configurable: true, value: undefined, writable: true },
+  });
+  const copyMethodKeys = ownKeys(safeArrayCopyMethods);
+  for (let index = 0; index < copyMethodKeys.length; index += 1) {
+    const key = copyMethodKeys[index];
+    if (key === undefined) continue;
+    const method = getOwnDataDescriptor(safeArrayCopyMethods, key)?.value;
+    if (typeof method !== "function") continue;
+    defineProperty(result, key, { configurable: true, value: method, writable: true });
+  }
+  return freezeObject(result);
+})();
+
+const createProtectedArray = (length = 0): unknown[] => {
+  const result: unknown[] = [];
+  setPrototypeOf(result, safeArrayPrototype);
+  defineProperties(result, {
+    length: { value: length, writable: true },
+    toJSON: { configurable: true, value: undefined, writable: true },
+  });
+  return result;
+};
+
 const defineProjectedProperty = (
   target: object,
   key: PropertyKey,
@@ -1137,20 +1347,7 @@ const transformValue = (
   if (existing !== undefined) return existing;
 
   if (arrayIsArray(input)) {
-    const result: unknown[] = [];
-    defineProperties(result, {
-      toJSON: { configurable: true, writable: true, value: undefined },
-      entries: { configurable: true, writable: true, value: safeArrayEntries },
-      keys: { configurable: true, writable: true, value: safeArrayKeys },
-      toString: { configurable: true, writable: true, value: safeArrayToString },
-      valueOf: { configurable: true, writable: true, value: safeValueOf },
-      values: { configurable: true, writable: true, value: safeArrayValues },
-      [Symbol.iterator]: { configurable: true, writable: true, value: safeArrayValues },
-      [Symbol.toPrimitive]: { configurable: true, writable: true, value: undefined },
-      [Symbol.toStringTag]: { configurable: true, writable: true, value: undefined },
-      [customInspect]: { configurable: true, writable: true, value: undefined },
-      [denoCustomInspect]: { configurable: true, writable: true, value: undefined },
-    });
+    const result = createProtectedArray();
     setSeen(seen, input, result);
     const lengthDescriptor = getOwnDataDescriptor(input, "length");
     if (lengthDescriptor === undefined || typeof lengthDescriptor.value !== "number") return result;
@@ -1298,18 +1495,18 @@ const protectValue = <T>(input: T, transform: ValueTransform, eager = false): Pr
 /** Mask strings nested in structured data. */
 export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> => {
   const resolved = resolveMaskOptions(options);
-  return protectValue(input, (value, entities) =>
-    maskDetectedText(value, entities, options.kinds, resolved),
-  );
+  return protectValue(input, (value, entities) => maskDetectedText(value, entities, resolved));
 };
 
 /** Redact strings nested in structured data. */
-export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> =>
-  protectValue(
+export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> => {
+  const resolved = resolveRedactOptions(options);
+  return protectValue(
     input,
-    (value, entities) => redactDetectedText(value, entities, options),
-    typeof options.replacement === "function",
+    (value, entities) => redactDetectedText(value, entities, resolved),
+    typeof resolved.replacement === "function",
   );
+};
 
 const DEFAULT_CACHE_SIZE = 1024;
 
@@ -1403,25 +1600,24 @@ export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
     throw new RangeError("cacheSize must be a non-negative safe integer");
   }
 
+  const redactOptions = options.mode === "redact" ? resolveRedactOptions(options) : undefined;
+  const maskOptions = redactOptions === undefined ? resolveMaskOptions(options) : undefined;
   const base = (input: string, entities?: PIIEntity[]): string => {
-    if (options.mode === "redact") {
+    if (redactOptions !== undefined) {
       return entities === undefined
-        ? redactText(input, options)
-        : redactDetectedText(input, entities, options);
+        ? redactDetectedText(input, findPii(input), redactOptions)
+        : redactDetectedText(input, entities, redactOptions);
     }
+    if (maskOptions === undefined) throw new TypeError("Missing mask options");
     return entities === undefined
-      ? maskText(input, options)
-      : maskDetectedText(input, entities, options.kinds, resolveMaskOptions(options));
+      ? maskDetectedText(input, findPii(input), maskOptions)
+      : maskDetectedText(input, entities, maskOptions);
   };
   const transforms = withCache(base, cacheSize);
 
   return {
     text: transforms.text,
     value: <T>(input: T): ProtectedValue<T> =>
-      protectValue(
-        input,
-        transforms.value,
-        options.mode === "redact" && typeof options.replacement === "function",
-      ),
+      protectValue(input, transforms.value, typeof redactOptions?.replacement === "function"),
   };
 };
