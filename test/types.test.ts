@@ -64,3 +64,12 @@ test("transformed value types omit array subclass members", () => {
   expect(labelsType).toBeTrue();
   expect(labels).toEqual(["[REDACTED]"]);
 });
+
+test("transformed value types preserve variadic tuple heads", () => {
+  const input: readonly ["jane@example.com", ...number[]] = ["jane@example.com", 1, 2];
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, readonly [string, ...number[]]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(result).toEqual(["[REDACTED]", 1, 2]);
+});
