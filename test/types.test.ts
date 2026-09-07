@@ -39,12 +39,14 @@ test("transformed value types widen strings and preserve record structure", () =
 
   const resultType: Equal<
     typeof result,
-    Projected<
-      Readonly<{
-        email?: string;
-        nested?: ProtectedValue<typeof input.nested>;
-      }>
-    >
+    | string
+    | Error
+    | Projected<
+        Readonly<{
+          email?: string;
+          nested?: ProtectedValue<typeof input.nested>;
+        }>
+      >
   > = true;
   expect(resultType).toBeTrue();
   expect<unknown>(result).toEqual({
@@ -67,8 +69,12 @@ test("transformed value types conservatively represent errors and opaque objects
   }
 
   type ProtectedAccount = ProtectedValue<Account>;
-  const emailType: Equal<ProtectedAccount["email"], string | undefined> = true;
-  const labelIsCallable: Extends<NonNullable<ProtectedAccount["label"]>, () => string> = false;
+  type ProtectedAccountProjection = Exclude<ProtectedAccount, string | Error>;
+  const emailType: Equal<ProtectedAccountProjection["email"], string | undefined> = true;
+  const labelIsCallable: Extends<
+    NonNullable<ProtectedAccountProjection["label"]>,
+    () => string
+  > = false;
   expect(emailType).toBeTrue();
   expect(labelIsCallable).toBeFalse();
 
@@ -100,12 +106,13 @@ test("transformed value types conservatively represent errors and opaque objects
     groups: "jane@example.com"[][] = [["jane@example.com"]];
   }
   const retained = redactValue(new MutableAccount());
+  type RetainedProjection = Exclude<typeof retained, string | Error>;
   const emailsAreGuaranteedArrays: Extends<
-    NonNullable<typeof retained.emails>,
+    NonNullable<RetainedProjection["emails"]>,
     readonly unknown[]
   > = false;
   const groupsAreGuaranteedArrays: Extends<
-    NonNullable<typeof retained.groups>,
+    NonNullable<RetainedProjection["groups"]>,
     readonly unknown[]
   > = false;
   expect(emailsAreGuaranteedArrays).toBeFalse();
@@ -222,6 +229,17 @@ test("transformed value types include primitive outputs for broad objects", () =
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
+test("transformed value types include strings concealed by narrow object types", () => {
+  const input: { foo: string } = Object.assign(new String("jane@example.com"), { foo: "safe" });
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+  const resultIsObject: Extends<typeof result, object> = false;
+
+  expect(stringBranch).toBeTrue();
+  expect(resultIsObject).toBeFalse();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
 test("transformed value types include primitive outputs for boxed-string supertypes", () => {
   const input: { readonly length: number } = new String("jane@example.com");
   const result = redactValue(input);
@@ -261,6 +279,7 @@ test("transformed value types include Error outputs for diagnostic supertypes", 
   const errorBranch: Extends<Error, typeof result> = true;
 
   expect(errorBranch).toBeTrue();
+  if (typeof result === "string") throw new Error("Expected a protected Error");
   expect(result.message).toBe("[REDACTED]");
 });
 
@@ -274,6 +293,7 @@ test("transformed value types include Error outputs for extended diagnostic shap
   const errorBranch: Extends<Error, typeof result> = true;
 
   expect(errorBranch).toBeTrue();
+  if (typeof result === "string") throw new Error("Expected a protected Error");
   expect(result.message).toBe("[REDACTED]");
 });
 
@@ -606,7 +626,7 @@ test("transformed value types project construct-only functions", () => {
   const result = redactValue(Account);
   const resultType: Equal<
     typeof result,
-    Projected<{ prototype?: Projected<{ readonly email?: string }> }>
+    Projected<{ prototype?: string | Error | Projected<{ readonly email?: string }> }>
   > = true;
 
   expect(resultType).toBeTrue();

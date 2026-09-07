@@ -87,7 +87,7 @@ const createConsumer = async (
       'const protectedText = redactValue("jane@example.com" as const);',
       "const textType: Equal<typeof protectedText, string> = true;",
       'const protectedRecord: ProtectedValue<{ readonly email: "jane@example.com" }> = redactValue({ email: "jane@example.com" } as const);',
-      "const recordType: Equal<typeof protectedRecord, Projected<{ readonly email?: string }>> = true;",
+      "const recordType: Equal<typeof protectedRecord, string | Error | Projected<{ readonly email?: string }>> = true;",
       'const broadFunction: Function = () => "jane@example.com";',
       "const protectedFunction = redactValue(broadFunction);",
       "const functionType: Equal<typeof protectedFunction, OpaqueProjected> = true;",
@@ -133,6 +133,7 @@ const createConsumer = async (
       'const narrowSource = { foo: "safe", toString: "jane@example.com" };',
       "const narrowInput: { foo: string } = narrowSource;",
       "const protectedNarrowInput = redactValue(narrowInput);",
+      "const narrowStringBranch: Extends<string, typeof protectedNarrowInput> = true;",
       'const narrowToStringIsAbsent: Extends<Exclude<typeof protectedNarrowInput, string | Error>["toString"], undefined> = false;',
       'const longNumericAugmentation = {} as Record<ThousandDigitKey, { secret: "jane@example.com" }>;',
       'const longNumericTuple = Object.assign(["jane@example.com"] as ["jane@example.com"], longNumericAugmentation);',
@@ -158,6 +159,7 @@ const createConsumer = async (
       "void namedDataBranch;",
       "void namedDataIsAbsent;",
       "void narrowToStringIsAbsent;",
+      "void narrowStringBranch;",
       "void longNumericTupleBranch;",
     ];
     if (modes.includes("pino")) {

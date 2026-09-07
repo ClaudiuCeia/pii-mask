@@ -26,8 +26,16 @@ deno.test("detects PII entities", () => {
 });
 
 deno.test("protects structured data", () => {
-  assert.equal(maskValue({ message: "Email jane@example.com" }).message, "Email ****************");
-  assert.equal(redactValue({ message: "Email jane@example.com" }).message, "Email [REDACTED]");
+  const masked = maskValue({ message: "Email jane@example.com" });
+  const redacted = redactValue({ message: "Email jane@example.com" });
+  if (typeof masked === "string" || masked instanceof Error) {
+    throw new Error("Expected a masked object projection");
+  }
+  if (typeof redacted === "string" || redacted instanceof Error) {
+    throw new Error("Expected a redacted object projection");
+  }
+  assert.equal(masked.message, "Email ****************");
+  assert.equal(redacted.message, "Email [REDACTED]");
 });
 
 deno.test("does not inherit Deno inspection hooks", () => {

@@ -11,6 +11,14 @@ import {
   redactValue,
 } from "../src/index.js";
 
+const requireObjectProjection: <T>(
+  value: T,
+) => asserts value is Exclude<Extract<T, object>, Error> = (value) => {
+  if (typeof value !== "object" || value === null || value instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
+};
+
 describe("findPii", () => {
   test("uses ts-duckling's PII parser set", () => {
     const entities = findPii("Contact jane@example.com from 192.168.0.1");
@@ -79,7 +87,7 @@ describe("structured values", () => {
     };
 
     const result = maskValue(input);
-    if (result instanceof Error) throw new Error("Expected an object projection");
+    requireObjectProjection(result);
 
     expect<unknown>(result).toEqual({
       message: "Email ****************",
@@ -98,7 +106,7 @@ describe("structured values", () => {
     input.self = input;
 
     const result = redactValue(input);
-    if (result instanceof Error) throw new Error("Expected an object projection");
+    requireObjectProjection(result);
 
     expect(result.message).toBe("Email [REDACTED]");
     expect(result.self).toBe(result);
@@ -172,8 +180,134 @@ describe("structured values", () => {
 
     expect(invoked).toBeFalse();
     expect(result).toHaveLength(1);
-    expect(0 in result).toBeFalse();
+    expect(Object.hasOwn(result, 0)).toBeFalse();
     expect(JSON.stringify(result)).toBe("[null]");
+  });
+
+  test("does not expose inherited values through array holes", () => {
+    const indexDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 0);
+    const inputValue = "jane@example.com";
+    const target: unknown[] = [];
+    target.length = 1;
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (target, key) => {
+        if (key === "length") {
+          Object.defineProperty(Object.prototype, 0, {
+            configurable: true,
+            get: () => inputValue,
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue(input);
+      } finally {
+        if (indexDescriptor === undefined) Reflect.deleteProperty(Object.prototype, 0);
+        else Object.defineProperty(Object.prototype, 0, indexDescriptor);
+      }
+    })();
+
+    expect(Object.hasOwn(result, 0)).toBeTrue();
+    expect(result[0]).toBeUndefined();
+    expect(JSON.stringify(result)).toBe("[null]");
+  });
+
+  test("does not trust proxies inserted into the array prototype chain", () => {
+    const originalPrototype = Object.getPrototypeOf(Array.prototype);
+    const inherited = new Proxy(Object.create(originalPrototype) as object, {
+      get: (target, key, receiver) =>
+        key === "0" ? "jane@example.com" : Reflect.get(target, key, receiver),
+      has: (target, key) => (key === "0" ? false : Reflect.has(target, key)),
+    });
+    const target: unknown[] = [];
+    target.length = 1;
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        if (key === "length") Object.setPrototypeOf(Array.prototype, inherited);
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue(input);
+      } finally {
+        Object.setPrototypeOf(Array.prototype, originalPrototype);
+      }
+    })();
+
+    expect(Object.hasOwn(result, 0)).toBeTrue();
+    expect(result[0]).toBeUndefined();
+    expect(JSON.stringify(result)).toBe("[null]");
+  });
+
+  test("rechecks array holes after later values mutate prototypes", () => {
+    const indexDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 0);
+    const target: unknown[] = [];
+    target.length = 2;
+    target[1] = new Proxy(
+      { safe: true },
+      {
+        ownKeys: (value) => {
+          Object.defineProperty(Object.prototype, 0, {
+            configurable: true,
+            get: () => "jane@example.com",
+          });
+          return Reflect.ownKeys(value);
+        },
+      },
+    );
+
+    const result = (() => {
+      try {
+        return redactValue(target);
+      } finally {
+        if (indexDescriptor === undefined) Reflect.deleteProperty(Object.prototype, 0);
+        else Object.defineProperty(Object.prototype, 0, indexDescriptor);
+      }
+    })();
+
+    expect(Object.hasOwn(result, 0)).toBeTrue();
+    expect(result[0]).toBeUndefined();
+    expect(result[1]).toEqual({ safe: true });
+    expect(JSON.stringify(result)).toBe('[null,{"safe":true}]');
+  });
+
+  test("rechecks nested array holes after later object properties mutate prototypes", () => {
+    const indexDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 0);
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    const trigger = new Proxy(
+      { safe: true },
+      {
+        ownKeys: (value) => {
+          Object.defineProperty(Object.prototype, 0, {
+            configurable: true,
+            get: () => "jane@example.com",
+          });
+          return Reflect.ownKeys(value);
+        },
+      },
+    );
+
+    const result = (() => {
+      try {
+        return redactValue({ sparse, trigger });
+      } finally {
+        if (indexDescriptor === undefined) Reflect.deleteProperty(Object.prototype, 0);
+        else Object.defineProperty(Object.prototype, 0, indexDescriptor);
+      }
+    })();
+    requireObjectProjection(result);
+    const protectedSparse = result.sparse;
+    if (!Array.isArray(protectedSparse)) throw new Error("Expected a protected array");
+
+    expect(Object.hasOwn(protectedSparse, 0)).toBeTrue();
+    expect(protectedSparse[0]).toBeUndefined();
+    expect(JSON.stringify(result)).toBe('{"sparse":[null],"trigger":{"safe":true}}');
   });
 
   test("protects Error messages, stacks, causes, and metadata", () => {
@@ -243,6 +377,7 @@ describe("structured values", () => {
     const result = redactValue(input);
 
     expect(reads).toBe(0);
+    requireObjectProjection(result);
     expect(result.email).toBe("[REDACTED]");
   });
 
@@ -318,6 +453,7 @@ describe("structured values", () => {
 
     const result = redactValue(date);
 
+    requireObjectProjection(result);
     expect(Object.getPrototypeOf(result)).toBeNull();
     expect(result.email).toBe("[REDACTED]");
     expect(Reflect.ownKeys(result)).toEqual(["email"]);
@@ -391,6 +527,7 @@ describe("structured values", () => {
     serializer.toJSON = (): string => "serializer@example.com";
 
     const result = redactValue({ serializer });
+    requireObjectProjection(result);
     const protectedSerializer: unknown = Reflect.get(result, "serializer");
     if (typeof protectedSerializer !== "object" || protectedSerializer === null) {
       throw new Error("Expected the callable to become an object");
@@ -487,7 +624,9 @@ describe("structured values", () => {
     );
 
     try {
-      expect(maskValue(input).email).toBe("****************");
+      const result = maskValue(input);
+      requireObjectProjection(result);
+      expect(result.email).toBe("****************");
     } finally {
       Object.defineProperty(Math, "min", minDescriptor);
     }
@@ -525,10 +664,114 @@ describe("structured values", () => {
     );
 
     try {
-      expect(redactValue(input).email).toBe("[REDACTED]");
+      const result = redactValue(input);
+      requireObjectProjection(result);
+      expect(result.email).toBe("[REDACTED]");
     } finally {
       Object.defineProperty(Array.prototype, "sort", sortDescriptor);
     }
+  });
+
+  test("protects detector array methods after proxy traversal", () => {
+    const filterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
+    if (filterDescriptor === undefined) throw new Error("Array filter descriptor is missing");
+    const poisonedFilter = (): never[] => [];
+    const input = new Proxy(
+      Object.assign(() => undefined, { email: "jane@example.com" }),
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Array.prototype, "filter", {
+            configurable: true,
+            value: poisonedFilter,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored = Array.prototype.filter === poisonedFilter;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(Array.prototype, "filter", filterDescriptor);
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    expect(result.email).toBe("[REDACTED]");
+  });
+
+  test("protects crypto detection from a replaced array fill method", () => {
+    const fillDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "fill");
+    if (fillDescriptor === undefined) throw new Error("Array fill descriptor is missing");
+    const poisonedFill = (): never[] => [];
+    const input = new Proxy(
+      Object.assign(() => undefined, { wallet: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT" }),
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Array.prototype, "fill", {
+            configurable: true,
+            value: poisonedFill,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored = Array.prototype.fill === poisonedFill;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(Array.prototype, "fill", fillDescriptor);
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    expect(result.wallet).toBe("[REDACTED]");
+  });
+
+  test("restores detector array methods when detection throws", () => {
+    const filterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
+    const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
+    if (filterDescriptor === undefined) throw new Error("Array filter descriptor is missing");
+    if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
+    const poisonedFilter = (): never[] => [];
+    const detectorError = new Error("Detector failed");
+    let replacementRestored = false;
+    let thrown: unknown;
+
+    try {
+      Object.defineProperty(Array.prototype, "filter", {
+        ...filterDescriptor,
+        value: poisonedFilter,
+      });
+      Object.defineProperty(RegExp.prototype, "exec", {
+        ...execDescriptor,
+        value: () => {
+          throw detectorError;
+        },
+      });
+      try {
+        findPii("jane@example.com");
+      } catch (error) {
+        thrown = error;
+        replacementRestored = Array.prototype.filter === poisonedFilter;
+      }
+    } finally {
+      Object.defineProperty(Array.prototype, "filter", filterDescriptor);
+      Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
+    }
+
+    expect(thrown).toBe(detectorError);
+    expect(replacementRestored).toBeTrue();
   });
 
   test("does not use a replaced array iterator for entity copies", () => {
@@ -574,7 +817,9 @@ describe("structured values", () => {
     );
 
     try {
-      expect(redactValue(input).email).toBe("[REDACTED]");
+      const result = redactValue(input);
+      requireObjectProjection(result);
+      expect(result.email).toBe("[REDACTED]");
     } finally {
       Object.defineProperty(String.prototype, "slice", sliceDescriptor);
     }
@@ -659,6 +904,60 @@ describe("structured values", () => {
     }
   });
 
+  test("does not inherit coercion hooks installed during array projection", () => {
+    const coercionDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.toPrimitive);
+    const target = ["jane@example.com"];
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        if (key === "length") {
+          Object.defineProperty(Array.prototype, Symbol.toPrimitive, {
+            configurable: true,
+            value: () => value[0],
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      expect(String(result)).toBe("[REDACTED]");
+    } finally {
+      if (coercionDescriptor === undefined) {
+        Reflect.deleteProperty(Array.prototype, Symbol.toPrimitive);
+      } else {
+        Object.defineProperty(Array.prototype, Symbol.toPrimitive, coercionDescriptor);
+      }
+    }
+  });
+
+  test("does not inherit coercion hooks installed during Error projection", () => {
+    const coercionDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, Symbol.toPrimitive);
+    const target = new Error("jane@example.com");
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        if (key === "message") {
+          Object.defineProperty(Error.prototype, Symbol.toPrimitive, {
+            configurable: true,
+            value: () => value.message,
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      expect(String(result)).toBe("Error: [REDACTED]");
+    } finally {
+      if (coercionDescriptor === undefined) {
+        Reflect.deleteProperty(Error.prototype, Symbol.toPrimitive);
+      } else {
+        Object.defineProperty(Error.prototype, Symbol.toPrimitive, coercionDescriptor);
+      }
+    }
+  });
+
   test("protects enumerable data properties on class instances", () => {
     class Account {
       email = "jane@example.com";
@@ -671,6 +970,7 @@ describe("structured values", () => {
     input.self = input;
     const result = redactValue(input);
 
+    requireObjectProjection(result);
     expect(Object.getPrototypeOf(result)).toBeNull();
     expect(result.email).toBe("[REDACTED]");
     expect(result.self).toBe(result);
@@ -681,6 +981,7 @@ describe("structured values", () => {
   test("protects non-callable toJSON data properties", () => {
     const result = redactValue({ toJSON: "jane@example.com" });
 
+    requireObjectProjection(result);
     expect(result.toJSON).toBe("[REDACTED]");
     expect(JSON.stringify(result)).toBe('{"toJSON":"[REDACTED]"}');
   });
@@ -740,6 +1041,7 @@ describe("structured values", () => {
     const result = redactValue(new Account());
 
     expect(reads).toBe(0);
+    requireObjectProjection(result);
     expect(Object.getPrototypeOf(result)).toBeNull();
     expect(Reflect.has(result, "email")).toBe(false);
   });
@@ -755,6 +1057,7 @@ describe("structured values", () => {
 
     const result = redactValue(new AccountDate("2026-09-07T00:00:00.000Z"));
 
+    requireObjectProjection(result);
     expect(Object.getPrototypeOf(result)).toBeNull();
     expect(result.email).toBe("[REDACTED]");
     expect(Reflect.has(result, "toJSON")).toBe(false);

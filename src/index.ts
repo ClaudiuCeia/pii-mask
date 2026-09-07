@@ -89,16 +89,7 @@ type ProtectedObjectProjection<T extends object> = object extends T
   ? ProtectedUnknownObject
   : ProtectedObject<T>;
 
-type ProtectedStructuredObject<T extends object> =
-  | ProtectedObjectProjection<T>
-  | (typeof String.prototype extends T ? string : "length" extends keyof T ? string : never)
-  | (Error extends T
-      ? Error
-      : "message" extends keyof T
-        ? Error
-        : "stack" extends keyof T
-          ? Error
-          : never);
+type ProtectedStructuredObject<T extends object> = string | Error | ProtectedObjectProjection<T>;
 
 type ProtectedPossiblePrimitive<T> =
   | (number extends T ? number : never)
@@ -278,20 +269,30 @@ type CanonicalArrayIndex<Key> = Key extends string
     : never
   : never;
 
-const detector = Duckling(PIIParsers);
+type DataDescriptor = PropertyDescriptor & { value: unknown };
+
+interface ProtectedIntrinsic {
+  readonly descriptor: DataDescriptor;
+  readonly key: PropertyKey;
+  readonly target: object;
+}
+
+const NativeArray = Array;
 const NativeError = Error;
 const NativeMap = Map;
+const NativeObjectPrototype = Object.prototype;
 const NativeWeakMap = WeakMap;
-const arraySort = Array.prototype.sort;
-const arrayIsArray = Array.isArray;
+const arraySort = NativeArray.prototype.sort;
+const arrayIsArray = NativeArray.isArray;
 const createObject = Object.create;
 const defineProperty = Object.defineProperty;
 const errorIsError = NativeError.isError;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const getPrototypeOf = Object.getPrototypeOf;
 const mapDelete = NativeMap.prototype.delete;
 const mapGet = NativeMap.prototype.get;
 const mapHas = NativeMap.prototype.has;
-const mapIteratorNext = Object.getPrototypeOf(new NativeMap().keys())
+const mapIteratorNext = getPrototypeOf(new NativeMap().keys())
   .next as () => IteratorResult<unknown>;
 const mapKeys = NativeMap.prototype.keys;
 const mapSet = NativeMap.prototype.set;
@@ -299,6 +300,7 @@ const mathMin = Math.min;
 const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
+const reflectDeleteProperty = Reflect.deleteProperty;
 const customInspect = Symbol.for("nodejs.util.inspect.custom");
 const denoCustomInspect = Symbol.for("Deno.customInspect");
 const repeatString = Function.prototype.call.bind(String.prototype.repeat) as (
@@ -314,6 +316,111 @@ const stringValueOf = String.prototype.valueOf;
 const weakMapGet = NativeWeakMap.prototype.get;
 const weakMapSet = NativeWeakMap.prototype.set;
 
+const captureDataDescriptor = (target: object, key: PropertyKey): DataDescriptor => {
+  const descriptor = getOwnPropertyDescriptor(target, key);
+  if (descriptor === undefined || !("value" in descriptor)) {
+    throw new TypeError(`Missing detector intrinsic ${String(key)}`);
+  }
+  return descriptor as DataDescriptor;
+};
+
+const captureIntrinsics = (
+  target: object,
+  keys: readonly PropertyKey[],
+): readonly ProtectedIntrinsic[] => {
+  const intrinsics: ProtectedIntrinsic[] = [];
+  let count = 0;
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
+    const descriptor = captureDataDescriptor(target, key);
+    defineProperty(intrinsics, count, {
+      configurable: true,
+      enumerable: true,
+      value: { descriptor, key, target },
+      writable: true,
+    });
+    count += 1;
+  }
+  return intrinsics;
+};
+
+const detectorArrayKeys = ["from", "isArray"] as const;
+const detectorArrayPrototypeKeys = [
+  Symbol.iterator,
+  "every",
+  "fill",
+  "filter",
+  "find",
+  "flat",
+  "includes",
+  "join",
+  "map",
+  "pop",
+  "push",
+  "reduce",
+  "reverse",
+  "slice",
+  "sort",
+] as const;
+
+const protectedDetectorIntrinsics = [
+  { target: globalThis, key: "Array", descriptor: captureDataDescriptor(globalThis, "Array") },
+  ...captureIntrinsics(NativeArray, detectorArrayKeys),
+  ...captureIntrinsics(NativeArray.prototype, detectorArrayPrototypeKeys),
+] as const satisfies readonly ProtectedIntrinsic[];
+
+const withProtectedDetectorIntrinsics = <T>(operation: () => T): T => {
+  const changedDescriptors: (PropertyDescriptor | undefined)[] = [];
+  const changedIndexes: number[] = [];
+  let changedCount = 0;
+
+  try {
+    for (let index = 0; index < protectedDetectorIntrinsics.length; index += 1) {
+      const intrinsic = protectedDetectorIntrinsics[index];
+      if (intrinsic === undefined) continue;
+      const current = getOwnPropertyDescriptor(intrinsic.target, intrinsic.key);
+      if (
+        current !== undefined &&
+        "value" in current &&
+        current.value === intrinsic.descriptor.value
+      ) {
+        continue;
+      }
+      defineProperty(changedDescriptors, changedCount, {
+        configurable: true,
+        enumerable: true,
+        value: current,
+        writable: true,
+      });
+      defineProperty(changedIndexes, changedCount, {
+        configurable: true,
+        enumerable: true,
+        value: index,
+        writable: true,
+      });
+      defineProperty(intrinsic.target, intrinsic.key, intrinsic.descriptor);
+      changedCount += 1;
+    }
+    return operation();
+  } finally {
+    for (let index = changedCount - 1; index >= 0; index -= 1) {
+      const intrinsicIndex = changedIndexes[index];
+      if (intrinsicIndex === undefined) continue;
+      const intrinsic = protectedDetectorIntrinsics[intrinsicIndex];
+      if (intrinsic === undefined) continue;
+      const descriptor = changedDescriptors[index];
+      if (descriptor === undefined) {
+        reflectDeleteProperty(intrinsic.target, intrinsic.key);
+      } else {
+        defineProperty(intrinsic.target, intrinsic.key, descriptor);
+      }
+    }
+  }
+};
+
+const detector = Duckling(PIIParsers);
+
 const getSeen = (seen: WeakMap<object, unknown>, input: object): unknown =>
   reflectApply(weakMapGet, seen, [input]);
 
@@ -322,7 +429,8 @@ const setSeen = (seen: WeakMap<object, unknown>, input: object, output: unknown)
 };
 
 /** Find PII spans in free-form text using ts-duckling. */
-export const findPii = (input: string): PIIEntity[] => detector.extract(input);
+export const findPii = (input: string): PIIEntity[] =>
+  withProtectedDetectorIntrinsics(() => detector.extract(input));
 
 const selectedEntities = (input: string, kinds?: readonly PIIKind[]): PIIEntity[] => {
   const entities = findPii(input);
@@ -425,8 +533,6 @@ const unboxString = (value: object): string | undefined => {
   }
 };
 
-type DataDescriptor = PropertyDescriptor & { value: unknown };
-
 const getOwnDataDescriptor = (input: object, key: PropertyKey): DataDescriptor | undefined => {
   const descriptor = getOwnPropertyDescriptor(input, key);
   return descriptor !== undefined && "value" in descriptor
@@ -511,6 +617,7 @@ const transformError = (
   snapshot: ErrorSnapshot,
   transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
+  sparseArrays: unknown[][],
 ): Error => {
   const message =
     snapshot.message !== undefined && typeof snapshot.message.value === "string"
@@ -523,6 +630,11 @@ const transformError = (
     value: undefined,
   });
   defineProperty(transformed, "toJSON", {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
+  defineProperty(transformed, Symbol.toPrimitive, {
     configurable: true,
     writable: true,
     value: undefined,
@@ -556,7 +668,7 @@ const transformError = (
   if (snapshot.cause !== undefined) {
     defineProperty(transformed, "cause", {
       ...snapshot.cause,
-      value: transformValue(snapshot.cause.value, transform, seen),
+      value: transformValue(snapshot.cause.value, transform, seen, sparseArrays),
     });
   }
 
@@ -569,7 +681,7 @@ const transformError = (
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
       defineProperty(transformed, key, {
         ...descriptor,
-        value: transformValue(descriptor.value, transform, seen),
+        value: transformValue(descriptor.value, transform, seen, sparseArrays),
       });
     }
   }
@@ -581,6 +693,7 @@ const transformValue = (
   input: unknown,
   transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
+  sparseArrays: unknown[][],
 ): unknown => {
   if (typeof input === "string") return transform(input);
   if ((typeof input !== "object" && typeof input !== "function") || input === null) return input;
@@ -591,6 +704,11 @@ const transformValue = (
   if (arrayIsArray(input)) {
     const result: unknown[] = [];
     defineProperty(result, "toJSON", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    defineProperty(result, Symbol.toPrimitive, {
       configurable: true,
       writable: true,
       value: undefined,
@@ -609,15 +727,27 @@ const transformValue = (
     const lengthDescriptor = getOwnDataDescriptor(input, "length");
     if (lengthDescriptor === undefined || typeof lengthDescriptor.value !== "number") return result;
     const length = lengthDescriptor.value;
+    let skippedIndex = false;
     defineProperty(result, "length", { value: length, writable: true });
     for (let index = 0; index < length; index += 1) {
       const descriptor = getOwnDataDescriptor(input, index);
-      if (descriptor === undefined) continue;
+      if (descriptor === undefined) {
+        skippedIndex = true;
+        continue;
+      }
       defineProperty(result, index, {
         configurable: true,
         enumerable: true,
         writable: true,
-        value: transformValue(descriptor.value, transform, seen),
+        value: transformValue(descriptor.value, transform, seen, sparseArrays),
+      });
+    }
+    if (skippedIndex) {
+      defineProperty(sparseArrays, sparseArrays.length, {
+        configurable: true,
+        enumerable: true,
+        value: result,
+        writable: true,
       });
     }
     return result;
@@ -628,7 +758,7 @@ const transformValue = (
   if (brandedError) {
     const errorSnapshot = snapshotError(input, true);
     if (errorSnapshot !== undefined) {
-      return transformError(input, errorSnapshot, transform, seen);
+      return transformError(input, errorSnapshot, transform, seen, sparseArrays);
     }
   }
 
@@ -642,7 +772,7 @@ const transformValue = (
 
   const errorSnapshot = snapshotError(input, false);
   if (errorSnapshot !== undefined) {
-    return transformError(input, errorSnapshot, transform, seen);
+    return transformError(input, errorSnapshot, transform, seen, sparseArrays);
   }
 
   const result = createObject(null) as Record<PropertyKey, unknown>;
@@ -653,15 +783,44 @@ const transformValue = (
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
       defineProperty(result, key, {
         ...descriptor,
-        value: transformValue(descriptor.value, transform, seen),
+        value: transformValue(descriptor.value, transform, seen, sparseArrays),
       });
     }
   }
   return result;
 };
 
-const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> =>
-  transformValue(input, transform, new NativeWeakMap()) as ProtectedValue<T>;
+const finalizeSparseArrays = (sparseArrays: unknown[][]): void => {
+  const nativePrototypeChainIsIntact =
+    getPrototypeOf(NativeArray.prototype) === NativeObjectPrototype &&
+    getPrototypeOf(NativeObjectPrototype) === null;
+  for (let arrayIndex = 0; arrayIndex < sparseArrays.length; arrayIndex += 1) {
+    const array = sparseArrays[arrayIndex];
+    if (array === undefined) continue;
+    for (let index = 0; index < array.length; index += 1) {
+      if (getOwnPropertyDescriptor(array, index) !== undefined) continue;
+      if (nativePrototypeChainIsIntact) {
+        const inheritedDescriptor =
+          getOwnPropertyDescriptor(NativeArray.prototype, index) ??
+          getOwnPropertyDescriptor(NativeObjectPrototype, index);
+        if (inheritedDescriptor === undefined) continue;
+      }
+      defineProperty(array, index, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: undefined,
+      });
+    }
+  }
+};
+
+const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> => {
+  const sparseArrays: unknown[][] = [];
+  const result = transformValue(input, transform, new NativeWeakMap(), sparseArrays);
+  finalizeSparseArrays(sparseArrays);
+  return result as ProtectedValue<T>;
+};
 
 /** Mask strings nested in structured data. */
 export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> =>
