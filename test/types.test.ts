@@ -96,17 +96,29 @@ test("transformed value types conservatively represent errors and opaque objects
   expect(retainedType).toBeTrue();
 });
 
-test("transformed value types omit array subclass members", () => {
+test("transformed value types omit array subclass members and preserve inherited methods", () => {
   class Labels extends Array<string> {
     label(): string {
       return this.join(",");
     }
   }
 
+  class Accounts extends Array<{ email: "jane@example.com" }> {}
+
   const labels = redactValue(new Labels("jane@example.com"));
   const labelsType: Equal<typeof labels, string[]> = true;
+  const accounts = redactValue(new Accounts({ email: "jane@example.com" }));
+  const accountsType: Equal<typeof accounts, Array<{ readonly email?: string }>> = true;
+  const retained = redactValue({ accounts });
+  const retainedType: Equal<
+    typeof retained,
+    { readonly accounts?: readonly { readonly email?: string }[] }
+  > = true;
   expect(labelsType).toBeTrue();
+  expect(accountsType).toBeTrue();
+  expect(retainedType).toBeTrue();
   expect(labels).toEqual(["[REDACTED]"]);
+  expect(accounts.map(({ email }) => email)).toEqual(["[REDACTED]"]);
 });
 
 test("transformed value types preserve variadic tuple heads", () => {
