@@ -248,9 +248,14 @@ const transformValue = (
   }
 
   const prototype = Object.getPrototypeOf(input);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
   if (
-    prototype === String.prototype ||
-    (prototype !== Object.prototype && prototype !== null && input instanceof String)
+    lengthDescriptor !== undefined &&
+    "value" in lengthDescriptor &&
+    typeof lengthDescriptor.value === "number" &&
+    !lengthDescriptor.configurable &&
+    !lengthDescriptor.enumerable &&
+    !lengthDescriptor.writable
   ) {
     const boxedString = unboxString(input);
     if (boxedString !== undefined) return transform(boxedString);

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { runInNewContext } from "node:vm";
 import {
   createPiiMasker,
   findPii,
@@ -135,9 +136,12 @@ describe("structured values", () => {
 
     const result = redactValue(new String("jane@example.com"));
     const subclassResult = redactValue(new SecretString("jane@example.com"));
+    const crossRealmString: unknown = runInNewContext('new String("jane@example.com")');
+    const crossRealmResult = redactValue(crossRealmString);
 
     expect(result).toBe("[REDACTED]");
     expect(subclassResult).toBe("[REDACTED]");
+    expect(crossRealmResult).toBe("[REDACTED]");
   });
 
   test("normalizes callable serializers", () => {
