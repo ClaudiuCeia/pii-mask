@@ -96,6 +96,7 @@ describe("structured values", () => {
     input.self = input;
 
     const result = redactValue(input);
+    if (result instanceof Error) throw new Error("Expected an object projection");
 
     expect(result.message).toBe("Email [REDACTED]");
     expect(result.self).toBe(result);
@@ -460,6 +461,44 @@ describe("structured values", () => {
     })();
 
     expect(Reflect.get(result, "email")).toBe("[REDACTED]");
+  });
+
+  test("uses the captured entity sorter after proxy traversal", () => {
+    const sortDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "sort");
+    if (sortDescriptor === undefined) throw new Error("Array sort descriptor is missing");
+    const originalSort: (
+      this: unknown[],
+      compare?: (left: unknown, right: unknown) => number,
+    ) => unknown[] = sortDescriptor.value;
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Array.prototype, "sort", {
+            configurable: true,
+            value: function (
+              this: unknown[],
+              compare?: (left: unknown, right: unknown) => number,
+            ): unknown[] {
+              const first = this[0];
+              if (typeof first === "object" && first !== null && "start" in first) {
+                this.length = 0;
+                return this;
+              }
+              return Reflect.apply(originalSort, this, [compare]);
+            },
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    try {
+      expect(redactValue(input).email).toBe("[REDACTED]");
+    } finally {
+      Object.defineProperty(Array.prototype, "sort", sortDescriptor);
+    }
   });
 
   test("does not inherit array inspection hooks installed during projection", () => {

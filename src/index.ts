@@ -60,8 +60,8 @@ export interface PiiMasker {
 
 /**
  * Possible result shapes for a value passed through a PII transformation.
- * Array-shaped types include both array and conservative object projections
- * because TypeScript cannot prove their runtime brand.
+ * Structural object types conservatively include every possible runtime brand
+ * and projection because TypeScript cannot prove object identity.
  */
 export type ProtectedValue<T> = T extends string
   ? string
@@ -74,9 +74,7 @@ export type ProtectedValue<T> = T extends string
         : T extends readonly unknown[]
           ? ProtectedArray<T>
           : T extends object
-            ? typeof String.prototype extends T
-              ? string | ProtectedObjectProjection<T>
-              : ProtectedObjectProjection<T>
+            ? ProtectedStructuredObject<T>
             : T;
 
 type ProtectedFunction<T extends Function> = Function extends T
@@ -91,13 +89,28 @@ type ProtectedObjectProjection<T extends object> = object extends T
   ? ProtectedUnknownObject
   : ProtectedObject<T>;
 
+type ProtectedStructuredObject<T extends object> =
+  | ProtectedObjectProjection<T>
+  | (typeof String.prototype extends T ? string : never)
+  | (T extends BoxedStringCandidate ? string : never)
+  | (Error extends T ? Error : never);
+
+interface BoxedStringCandidate {
+  readonly [key: number]: string;
+  readonly length: number;
+}
+
 type ProtectedUnknownObject = { readonly [K in PropertyKey]?: unknown } & {
   readonly [K in ObjectPrototypeKey]?: unknown;
 };
 
 type ProtectedObject<T extends object> = {
   readonly [
-    K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+    K in keyof T as T[K] extends (...arguments_: never[]) => unknown
+      ? K extends ObjectPrototypeKey
+        ? K
+        : never
+      : K
   ]?: ProtectedObjectValue<T[K]>;
 } & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
 
@@ -124,11 +137,7 @@ type ProtectedRetainedArrayItems<T extends readonly unknown[]> = {
   readonly [K in keyof T]: ProtectedRetainedValue<T[K]>;
 };
 
-type RetainedObjectPrototypeKey<T extends object> = {
-  [K in Extract<ObjectPrototypeKey, keyof T>]: T[K] extends (...arguments_: never[]) => unknown
-    ? never
-    : K;
-}[Extract<ObjectPrototypeKey, keyof T>];
+type RetainedObjectPrototypeKey<T extends object> = Extract<ObjectPrototypeKey, keyof T>;
 
 type ObjectPrototypeKey =
   | "constructor"
@@ -160,7 +169,11 @@ type ProtectedArrayItems<T extends readonly unknown[]> = {
 
 type ProtectedArrayObject<T extends readonly unknown[]> = {
   readonly [
-    K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+    K in keyof T as T[K] extends (...arguments_: never[]) => unknown
+      ? K extends ObjectPrototypeKey
+        ? K
+        : never
+      : K
   ]?: K extends number ? unknown : ProtectedObjectValue<T[K]>;
 } & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
 
@@ -263,6 +276,7 @@ const detector = Duckling(PIIParsers);
 const NativeError = Error;
 const NativeMap = Map;
 const NativeWeakMap = WeakMap;
+const arraySort = Array.prototype.sort;
 const arrayIsArray = Array.isArray;
 const createObject = Object.create;
 const defineProperty = Object.defineProperty;
@@ -279,6 +293,7 @@ const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const customInspect = Symbol.for("nodejs.util.inspect.custom");
+const denoCustomInspect = Symbol.for("Deno.customInspect");
 const stringValueOf = String.prototype.valueOf;
 const weakMapGet = NativeWeakMap.prototype.get;
 const weakMapSet = NativeWeakMap.prototype.set;
@@ -310,9 +325,10 @@ const replaceEntities = (
 
   let result = input;
   let boundary = input.length;
-  const ordered = [...entities].sort(
-    (left, right) => right.start - left.start || right.end - left.end,
-  );
+  const ordered = [...entities];
+  reflectApply(arraySort, ordered, [
+    (left: PIIEntity, right: PIIEntity) => right.start - left.start || right.end - left.end,
+  ]);
 
   for (const entity of ordered) {
     if (entity.end > boundary) continue;
@@ -472,6 +488,11 @@ const transformError = (
     writable: true,
     value: undefined,
   });
+  defineProperty(transformed, denoCustomInspect, {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
   setSeen(seen, error, transformed);
 
   if (snapshot.name !== undefined && typeof snapshot.name.value === "string") {
@@ -532,6 +553,11 @@ const transformValue = (
       value: undefined,
     });
     defineProperty(result, customInspect, {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    defineProperty(result, denoCustomInspect, {
       configurable: true,
       writable: true,
       value: undefined,
