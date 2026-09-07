@@ -104,13 +104,13 @@ describe("structured values", () => {
     const inputValue = "jane@example.com";
     const push = Array.prototype.push;
     const input = new Proxy([inputValue], {
-      get: (target, key, receiver) => {
+      getOwnPropertyDescriptor: (target, key) => {
         if (key === "length") {
           Array.prototype.push = function (value): number {
             return Reflect.apply(push, this, [value === "[REDACTED]" ? inputValue : value]);
           };
         }
-        return Reflect.get(target, key, receiver);
+        return Reflect.getOwnPropertyDescriptor(target, key);
       },
     });
 
@@ -131,14 +131,14 @@ describe("structured values", () => {
     const inputValue = "jane@example.com";
     const toJSONDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "toJSON");
     const input = new Proxy([inputValue], {
-      get: (target, key, receiver) => {
+      getOwnPropertyDescriptor: (target, key) => {
         if (key === "length") {
           Object.defineProperty(Array.prototype, "toJSON", {
             configurable: true,
             value: () => inputValue,
           });
         }
-        return Reflect.get(target, key, receiver);
+        return Reflect.getOwnPropertyDescriptor(target, key);
       },
     });
 
@@ -151,6 +151,25 @@ describe("structured values", () => {
     }
 
     expect(serialized).toBe('["[REDACTED]"]');
+  });
+
+  test("does not invoke array index accessors", () => {
+    let invoked = false;
+    const input = Array.from<string>({ length: 1 });
+    Object.defineProperty(input, 0, {
+      enumerable: true,
+      get: () => {
+        invoked = true;
+        throw new Error("Accessor must not run");
+      },
+    });
+
+    const result = redactValue(input);
+
+    expect(invoked).toBeFalse();
+    expect(result).toHaveLength(1);
+    expect(0 in result).toBeFalse();
+    expect(JSON.stringify(result)).toBe("[null]");
   });
 
   test("protects Error messages, stacks, causes, and metadata", () => {
