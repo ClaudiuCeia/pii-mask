@@ -154,11 +154,6 @@ export const redactText = (input: string, options: RedactOptions = {}): string =
   );
 };
 
-const isPlainObject = (value: object): boolean => {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
 const unboxString = (value: object): string | undefined => {
   try {
     const unboxed: unknown = Reflect.apply(String.prototype.valueOf, value, []);
@@ -201,17 +196,12 @@ const transformError = (
   }
 
   for (const key of Reflect.ownKeys(error)) {
-    if (
-      key === "name" ||
-      key === "message" ||
-      key === "stack" ||
-      key === "cause" ||
-      key === "toJSON"
-    ) {
+    if (key === "name" || key === "message" || key === "stack" || key === "cause") {
       continue;
     }
     const descriptor = Object.getOwnPropertyDescriptor(error, key);
     if (descriptor?.enumerable && "value" in descriptor) {
+      if (key === "toJSON" && typeof descriptor.value === "function") continue;
       Object.defineProperty(transformed, key, {
         ...descriptor,
         value: transformValue(descriptor.value, transform, seen),
@@ -245,14 +235,15 @@ const transformValue = (
     return result;
   }
 
+  const prototype = Object.getPrototypeOf(input);
   const result = Object.create(
-    isPlainObject(input) ? Object.getPrototypeOf(input) : null,
+    prototype === Object.prototype || prototype === null ? prototype : null,
   ) as Record<PropertyKey, unknown>;
   seen.set(input, result);
   for (const key of Reflect.ownKeys(input)) {
-    if (key === "toJSON") continue;
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
     if (descriptor?.enumerable && "value" in descriptor) {
+      if (key === "toJSON" && typeof descriptor.value === "function") continue;
       Object.defineProperty(result, key, {
         ...descriptor,
         value: transformValue(descriptor.value, transform, seen),

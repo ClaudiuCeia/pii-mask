@@ -172,6 +172,33 @@ describe("structured values", () => {
     expect(Reflect.ownKeys(result)).toEqual(["email", "self"]);
   });
 
+  test("protects non-callable toJSON data properties", () => {
+    const result = redactValue({ toJSON: "jane@example.com" });
+
+    expect(result.toJSON).toBe("[REDACTED]");
+    expect(JSON.stringify(result)).toBe('{"toJSON":"[REDACTED]"}');
+  });
+
+  test("reuses the prototype selected for plain-object output", () => {
+    const serializer = { toJSON: (): string => "serializer@example.com" };
+    let prototypeReads = 0;
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        getPrototypeOf: () => {
+          prototypeReads += 1;
+          return prototypeReads <= 2 ? Object.prototype : serializer;
+        },
+      },
+    );
+
+    const result = redactValue(input);
+
+    expect(prototypeReads).toBe(2);
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
+  });
+
   test("does not invoke or retain accessors from class instances", () => {
     let reads = 0;
     class Account {
