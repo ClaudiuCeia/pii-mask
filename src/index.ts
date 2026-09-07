@@ -74,18 +74,26 @@ export type ProtectedValue<T> = T extends string
         : T extends readonly unknown[]
           ? ProtectedArray<T>
           : T extends object
-            ? object extends T
-              ? string | ProtectedObject<T>
-              : ProtectedObject<T>
+            ? typeof String.prototype extends T
+              ? string | ProtectedObjectProjection<T>
+              : ProtectedObjectProjection<T>
             : T;
 
 type ProtectedFunction<T extends Function> = Function extends T
-  ? ProtectedObject<object>
+  ? ProtectedUnknownObject
   : CallableFunction extends T
-    ? ProtectedObject<object>
+    ? ProtectedUnknownObject
     : NewableFunction extends T
-      ? ProtectedObject<object>
+      ? ProtectedUnknownObject
       : ProtectedObject<T>;
+
+type ProtectedObjectProjection<T extends object> = object extends T
+  ? ProtectedUnknownObject
+  : ProtectedObject<T>;
+
+type ProtectedUnknownObject = { readonly [K in PropertyKey]?: unknown } & {
+  readonly [K in ObjectPrototypeKey]?: unknown;
+};
 
 type ProtectedObject<T extends object> = {
   readonly [
@@ -262,6 +270,7 @@ const errorIsError = NativeError.isError;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const mapDelete = NativeMap.prototype.delete;
 const mapGet = NativeMap.prototype.get;
+const mapHas = NativeMap.prototype.has;
 const mapIteratorNext = Object.getPrototypeOf(new NativeMap().keys())
   .next as () => IteratorResult<unknown>;
 const mapKeys = NativeMap.prototype.keys;
@@ -269,6 +278,7 @@ const mapSet = NativeMap.prototype.set;
 const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
+const customInspect = Symbol.for("nodejs.util.inspect.custom");
 const stringValueOf = String.prototype.valueOf;
 const weakMapGet = NativeWeakMap.prototype.get;
 const weakMapSet = NativeWeakMap.prototype.set;
@@ -457,6 +467,11 @@ const transformError = (
     writable: true,
     value: undefined,
   });
+  defineProperty(transformed, customInspect, {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
   setSeen(seen, error, transformed);
 
   if (snapshot.name !== undefined && typeof snapshot.name.value === "string") {
@@ -516,6 +531,11 @@ const transformValue = (
       writable: true,
       value: undefined,
     });
+    defineProperty(result, customInspect, {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
     setSeen(seen, input, result);
     const lengthDescriptor = getOwnDataDescriptor(input, "length");
     if (lengthDescriptor === undefined || typeof lengthDescriptor.value !== "number") return result;
@@ -536,9 +556,11 @@ const transformValue = (
 
   const brandedError =
     typeof errorIsError === "function" && reflectApply(errorIsError, NativeError, [input]);
-  const errorSnapshot = snapshotError(input, brandedError);
-  if (errorSnapshot !== undefined) {
-    return transformError(input, errorSnapshot, transform, seen);
+  if (brandedError) {
+    const errorSnapshot = snapshotError(input, true);
+    if (errorSnapshot !== undefined) {
+      return transformError(input, errorSnapshot, transform, seen);
+    }
   }
 
   const boxedString = probeBoxedString(input);
@@ -547,6 +569,11 @@ const transformValue = (
     const result = createObject(null) as Record<PropertyKey, unknown>;
     setSeen(seen, input, result);
     return result;
+  }
+
+  const errorSnapshot = snapshotError(input, false);
+  if (errorSnapshot !== undefined) {
+    return transformError(input, errorSnapshot, transform, seen);
   }
 
   const result = createObject(null) as Record<PropertyKey, unknown>;
@@ -595,6 +622,12 @@ const withCache = (
     }
 
     const transformed = transform(input);
+    const insertedReentrantly = reflectApply(mapHas, cache, [input]) as boolean;
+    if (insertedReentrantly) {
+      reflectApply(mapDelete, cache, [input]);
+      reflectApply(mapSet, cache, [input, transformed]);
+      return transformed;
+    }
     if (size >= cacheSize) {
       const keys = reflectApply(mapKeys, cache, []);
       const oldest = reflectApply(mapIteratorNext, keys, []) as IteratorResult<string>;
