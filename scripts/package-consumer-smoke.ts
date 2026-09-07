@@ -80,6 +80,9 @@ const createConsumer = async (
       "type Equal<Left, Right> = (<Value>() => Value extends Left ? 1 : 2) extends (<Value>() => Value extends Right ? 1 : 2) ? true : false;",
       "type Extends<Left, Right> = [Left] extends [Right] ? true : false;",
       "type Projected<Shape> = Readonly<Shape> & { readonly constructor?: never; readonly hasOwnProperty?: never; readonly isPrototypeOf?: never; readonly propertyIsEnumerable?: never; readonly toLocaleString?: never; readonly toString?: never; readonly valueOf?: never };",
+      'type TenDigits = "1234567890";',
+      "type HundredDigits = `${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}${TenDigits}`;",
+      "type ThousandDigitKey = `${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}${HundredDigits}`;",
       'const protectedText = redactValue("jane@example.com" as const);',
       "const textType: Equal<typeof protectedText, string> = true;",
       'const protectedRecord: ProtectedValue<{ readonly email: "jane@example.com" }> = redactValue({ email: "jane@example.com" } as const);',
@@ -94,6 +97,10 @@ const createConsumer = async (
       "const tailBranch: Extends<readonly [...number[], string], typeof protectedTail> = true;",
       'const protectedOptional = redactValue(["jane@example.com", 1] as readonly ["jane@example.com"?, ...number[]]);',
       "const optionalBranch: Extends<readonly [string?, ...number[]], typeof protectedOptional> = true;",
+      'const longNumericAugmentation = {} as Record<ThousandDigitKey, { secret: "jane@example.com" }>;',
+      'const longNumericTuple = Object.assign(["jane@example.com"] as ["jane@example.com"], longNumericAugmentation);',
+      "const protectedLongNumericTuple = redactValue(longNumericTuple);",
+      "const longNumericTupleBranch: Extends<string[], typeof protectedLongNumericTuple> = true;",
       "void textType;",
       "void recordType;",
       "void functionType;",
@@ -101,6 +108,7 @@ const createConsumer = async (
       "void tupleMapIsGuaranteed;",
       "void tailBranch;",
       "void optionalBranch;",
+      "void longNumericTupleBranch;",
     ];
     if (modes.includes("pino")) {
       imports.push(
