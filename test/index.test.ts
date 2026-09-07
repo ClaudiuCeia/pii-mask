@@ -127,6 +127,32 @@ describe("structured values", () => {
     expect(JSON.stringify(result)).toBe('["[REDACTED]"]');
   });
 
+  test("shadows array serialization hooks installed during projection", () => {
+    const inputValue = "jane@example.com";
+    const toJSONDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "toJSON");
+    const input = new Proxy([inputValue], {
+      get: (target, key, receiver) => {
+        if (key === "length") {
+          Object.defineProperty(Array.prototype, "toJSON", {
+            configurable: true,
+            value: () => inputValue,
+          });
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(redactValue(input));
+    } finally {
+      if (toJSONDescriptor === undefined) Reflect.deleteProperty(Array.prototype, "toJSON");
+      else Object.defineProperty(Array.prototype, "toJSON", toJSONDescriptor);
+    }
+
+    expect(serialized).toBe('["[REDACTED]"]');
+  });
+
   test("protects Error messages, stacks, causes, and metadata", () => {
     const cause = new Error("User jane@example.com");
     const input = new Error("Request from 192.168.0.1", { cause });
@@ -192,6 +218,41 @@ describe("structured values", () => {
     }
   });
 
+  test("defines protected error names without invoking prototype setters", () => {
+    const originalNameDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, "name");
+    const original = new Error("Request from 192.168.0.1");
+    original.name = "Account jane@example.com";
+    const input = new Proxy(original, {
+      getOwnPropertyDescriptor: (target, key) => {
+        if (key === "message") {
+          Object.defineProperty(Error.prototype, "name", {
+            configurable: true,
+            set: (result: Error) => {
+              Object.defineProperty(result, "toJSON", {
+                configurable: true,
+                value: () => original.message,
+              });
+            },
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue(input);
+      } finally {
+        if (originalNameDescriptor === undefined) Reflect.deleteProperty(Error.prototype, "name");
+        else Object.defineProperty(Error.prototype, "name", originalNameDescriptor);
+      }
+    })();
+
+    expect(result.name).toBe("Account [REDACTED]");
+    expect(Reflect.get(result, "toJSON")).toBeUndefined();
+    expect(JSON.stringify(result)).toBe('{"name":"Account [REDACTED]"}');
+  });
+
   test("normalizes unsupported built-ins without retaining serialization hooks", () => {
     const date = Object.assign(new Date("2026-09-07T00:00:00.000Z"), {
       email: "jane@example.com",
@@ -248,6 +309,45 @@ describe("structured values", () => {
     expect(Object.getPrototypeOf(protectedSerializer)).toBeNull();
     expect(Reflect.has(protectedSerializer, "toJSON")).toBe(false);
     expect(JSON.stringify(result)).toBe('{"serializer":{}}');
+  });
+
+  test("uses captured WeakMap methods while projecting callable proxies", () => {
+    const setDescriptor = Object.getOwnPropertyDescriptor(WeakMap.prototype, "set");
+    if (setDescriptor === undefined) throw new Error("WeakMap set descriptor is missing");
+    const callable = Object.assign(() => "ignored", { email: "jane@example.com" });
+    const input = new Proxy(callable, {
+      getPrototypeOf: (target) => {
+        Object.defineProperty(WeakMap.prototype, "set", {
+          configurable: true,
+          value: function (
+            this: WeakMap<object, unknown>,
+            key: object,
+            value: unknown,
+          ): WeakMap<object, unknown> {
+            if ((typeof value === "object" || typeof value === "function") && value !== null) {
+              Object.defineProperty(value, "toJSON", {
+                configurable: true,
+                value: () => callable.email,
+              });
+            }
+            return Reflect.apply(setDescriptor.value, this, [key, value]);
+          },
+        });
+        return Reflect.getPrototypeOf(target);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue(input);
+      } finally {
+        Object.defineProperty(WeakMap.prototype, "set", setDescriptor);
+      }
+    })();
+
+    expect(result.email).toBe("[REDACTED]");
+    expect(Reflect.has(result, "toJSON")).toBeFalse();
+    expect(JSON.stringify(result)).toBe('{"email":"[REDACTED]"}');
   });
 
   test("protects enumerable data properties on class instances", () => {
