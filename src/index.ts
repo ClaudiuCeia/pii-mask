@@ -77,23 +77,19 @@ export type ProtectedValue<T> = T extends string
 
 type ProtectedArrayItems<T extends readonly unknown[]> =
   Exclude<keyof T, keyof unknown[] | `${number}`> extends never
-    ? number extends T["length"]
-      ? T extends readonly [infer Head, ...infer Tail]
-        ? [ProtectedValue<Head>, ...ProtectedArrayItems<Tail>]
-        : T extends readonly [...infer Initial, infer Last]
-          ? [...ProtectedArrayItems<Initial>, ProtectedValue<Last>]
-          : "0" extends keyof T
-            ? T extends readonly [(infer Head)?, ...infer Tail]
-              ? [ProtectedValue<Head>?, ...ProtectedArrayItems<Tail>]
-              : Array<ProtectedValue<T[number]>>
-            : Array<ProtectedValue<T[number]>>
-      : T extends readonly []
-        ? []
-        : T extends readonly [infer Head, ...infer Tail]
+    ? Array<T[number]>[typeof Symbol.iterator] extends T[typeof Symbol.iterator]
+      ? number extends T["length"]
+        ? T extends readonly [infer Head, ...infer Tail]
           ? [ProtectedValue<Head>, ...ProtectedArrayItems<Tail>]
-          : T extends readonly [(infer Head)?, ...infer Tail]
-            ? [ProtectedValue<Head>?, ...ProtectedArrayItems<Tail>]
-            : never
+          : T extends readonly [...infer Initial, infer Last]
+            ? [...ProtectedArrayItems<Initial>, ProtectedValue<Last>]
+            : "0" extends keyof T
+              ? T extends readonly [(infer Head)?, ...infer Tail]
+                ? [ProtectedValue<Head>?, ...ProtectedArrayItems<Tail>]
+                : Array<ProtectedValue<T[number]>>
+              : Array<ProtectedValue<T[number]>>
+        : { [K in keyof T]: ProtectedValue<T[K]> }
+      : Array<ProtectedValue<T[number]>>
     : Array<ProtectedValue<T[number]>>;
 
 const detector = Duckling(PIIParsers);
