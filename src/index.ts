@@ -80,8 +80,12 @@ type ProtectedFunction<T extends Function> = Function extends T
 type ProtectedObject<T extends object> = {
   readonly [
     K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
-  ]?: ProtectedValue<T[K]>;
+  ]?: ProtectedObjectValue<T[K]>;
 } & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
+
+type ProtectedObjectValue<T> = T extends readonly unknown[]
+  ? Readonly<ProtectedArray<T>>
+  : ProtectedValue<T>;
 
 type RetainedObjectPrototypeKey<T extends object> = {
   [K in Extract<ObjectPrototypeKey, keyof T>]: T[K] extends (...arguments_: never[]) => unknown
