@@ -67,9 +67,11 @@ export type ProtectedValue<T> = T extends string
       ? Error
       : T extends readonly unknown[]
         ? number extends T["length"]
-          ? T extends unknown[]
-            ? Array<ProtectedValue<T[number]>>
-            : ReadonlyArray<ProtectedValue<T[number]>>
+          ? "0" extends keyof T
+            ? { [K in keyof T]: ProtectedValue<T[K]> }
+            : T extends unknown[]
+              ? Array<ProtectedValue<T[number]>>
+              : ReadonlyArray<ProtectedValue<T[number]>>
           : { [K in keyof T]: ProtectedValue<T[K]> }
         : T extends object
           ? {
