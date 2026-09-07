@@ -300,6 +300,7 @@ const defineProperties = Object.defineProperties;
 const defineProperty = Object.defineProperty;
 const errorIsError = NativeError.isError;
 const errorToString = NativeError.prototype.toString;
+const functionBind = Function.prototype.bind;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const getPrototypeOf = Object.getPrototypeOf;
 const setPrototypeOf = Object.setPrototypeOf;
@@ -839,9 +840,12 @@ type ValueTransform = ((input: string, entities: PIIEntity[]) => string) & {
   readonly peek?: (input: string) => string | undefined;
 };
 
-type CachedTextTransform = ((input: string, entities?: PIIEntity[]) => string) & {
-  readonly peek?: (input: string) => string | undefined;
-};
+type CachedTextTransform = (input: string, entities?: PIIEntity[]) => string;
+
+interface CachedTransforms {
+  readonly text: CachedTextTransform;
+  readonly value: ValueTransform;
+}
 
 const transformOneString = (input: string, transform: ValueTransform): string => {
   const cached = transform.peek?.(input);
@@ -1339,44 +1343,60 @@ const DEFAULT_CACHE_SIZE = 1024;
 const withCache = (
   transform: (input: string, entities?: PIIEntity[]) => string,
   cacheSize: number,
-): CachedTextTransform => {
-  if (cacheSize === 0) return transform;
+): CachedTransforms => {
+  if (cacheSize === 0) return { text: transform, value: transform };
 
   const cache = new NativeMap<string, string>();
+  const cacheDelete = reflectApply(functionBind, mapDelete, [cache]) as (input: string) => boolean;
+  const cacheGet = reflectApply(functionBind, mapGet, [cache]) as (
+    input: string,
+  ) => string | undefined;
+  const cacheHas = reflectApply(functionBind, mapHas, [cache]) as (input: string) => boolean;
+  const cacheKeys = reflectApply(functionBind, mapKeys, [cache]) as () => MapIterator<string>;
+  const cacheSet = reflectApply(functionBind, mapSet, [cache]) as (
+    input: string,
+    output: string,
+  ) => Map<string, string>;
   let size = 0;
   const lookup = (input: string): string | undefined => {
-    const hit = reflectApply(mapGet, cache, [input]) as string | undefined;
+    const hit = cacheGet(input);
     if (hit === undefined) return undefined;
-    reflectApply(mapDelete, cache, [input]);
-    reflectApply(mapSet, cache, [input, hit]);
+    cacheDelete(input);
+    cacheSet(input, hit);
     return hit;
   };
 
-  const cachedTransform = ((input: string, entities?: PIIEntity[]): string => {
-    const hit = lookup(input);
-    if (hit !== undefined) return hit;
+  const cachedTransform = (input: string, entities?: PIIEntity[]): string => {
+    const hit = cacheGet(input);
+    if (hit !== undefined) {
+      cacheDelete(input);
+      cacheSet(input, hit);
+      return hit;
+    }
 
     const transformed = transform(input, entities);
-    const insertedReentrantly = reflectApply(mapHas, cache, [input]) as boolean;
+    const insertedReentrantly = cacheHas(input);
     if (insertedReentrantly) {
-      reflectApply(mapDelete, cache, [input]);
-      reflectApply(mapSet, cache, [input, transformed]);
+      cacheDelete(input);
+      cacheSet(input, transformed);
       return transformed;
     }
     if (size >= cacheSize) {
-      const keys = reflectApply(mapKeys, cache, []);
+      const keys = cacheKeys();
       const oldest = reflectApply(mapIteratorNext, keys, []) as IteratorResult<string>;
       if (!oldest.done) {
-        reflectApply(mapDelete, cache, [oldest.value]);
+        cacheDelete(oldest.value);
         size -= 1;
       }
     }
-    reflectApply(mapSet, cache, [input, transformed]);
+    cacheSet(input, transformed);
     size += 1;
     return transformed;
-  }) as CachedTextTransform;
-  defineProperty(cachedTransform, "peek", { value: lookup });
-  return cachedTransform;
+  };
+  const valueTransform = ((input: string, entities: PIIEntity[]): string =>
+    cachedTransform(input, entities)) as ValueTransform;
+  defineProperty(valueTransform, "peek", { value: lookup });
+  return { text: cachedTransform, value: valueTransform };
 };
 
 /** Create a reusable text and structured-value protector. */
@@ -1396,14 +1416,14 @@ export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
       ? maskText(input, options)
       : maskDetectedText(input, entities, options.kinds, resolveMaskOptions(options));
   };
-  const transform = withCache(base, cacheSize);
+  const transforms = withCache(base, cacheSize);
 
   return {
-    text: transform,
+    text: transforms.text,
     value: <T>(input: T): ProtectedValue<T> =>
       protectValue(
         input,
-        transform,
+        transforms.value,
         options.mode === "redact" && typeof options.replacement === "function",
       ),
   };
