@@ -97,7 +97,7 @@ npm install @claudiu-ceia/pii-mask
 deno add jsr:@claudiu-ceia/pii-mask@^0.2.0
 ```
 
-Install `pino` or `winston` as an optional peer when using its adapter. Pino applications running under Deno also need `--allow-sys=hostname`, which Pino uses for its default bindings.
+Install `pino` or `winston` as an optional peer when using its adapter. The Pino adapter requires Pino 10 because it protects the final serialized entry with `hooks.streamWrite`. Pino applications running under Deno also need `--allow-sys=hostname`, which Pino uses for its default bindings.
 
 Deno 2.9's default dependency-age policy may defer a release published within the last 24 hours. Current Deno versions can bypass it with `--min-dep-age=0`. On Deno 2.9.0, wait for the policy window or temporarily exclude this package and its JSR dependencies from `minimumDependencyAge`.
 
@@ -105,7 +105,7 @@ The package is ESM-only. The npm artifact includes JavaScript and type declarati
 
 ## Pino
 
-The Pino adapter returns a standard `hooks.logMethod` configuration. It transforms log arguments before Pino serializes them.
+The Pino adapter returns a standard `hooks.streamWrite` configuration. It transforms the complete serialized entry after base and child bindings, serializers, mixins, and message prefixes have been applied.
 
 ```ts
 import pino from "pino";
@@ -118,7 +118,7 @@ const logger = pino({
 });
 ```
 
-Use Pino's path-based `redact` option alongside `pii-mask` for fields you always consider sensitive, even when their value does not match a supported PII format. If you already use a `logMethod` hook, compose the behaviors explicitly because Pino accepts one hook at that position.
+Use Pino's path-based `redact` option alongside `pii-mask` for fields you always consider sensitive, even when their value does not match a supported PII format. If you already use a `streamWrite` hook, compose the behaviors explicitly because Pino accepts one hook at that position. Invalid JSON from a preceding hook fails closed with the non-retryable `PinoOutputError` code `PII_MASK_INVALID_PINO_OUTPUT`. Pino diagnostics-channel subscribers and metadata-aware destinations observe data before `streamWrite` performs the transformation, so they must be treated as unprotected sinks.
 
 ## Winston
 

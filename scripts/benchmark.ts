@@ -43,7 +43,7 @@ const parseCli = (args: readonly string[]): CliOptions => {
 
 type PinoHookModule = Readonly<{
   pinoPiiMasking(options?: Record<string, unknown>): {
-    hooks: { logMethod(args: unknown[], method: unknown, level: number): void };
+    hooks: { streamWrite(line: string): string };
   };
 }>;
 

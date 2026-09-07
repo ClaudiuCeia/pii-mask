@@ -96,7 +96,7 @@
     "winston": "3.19.0"
   },
   "peerDependencies": {
-    "pino": ">=9 <11",
+    "pino": ">=10 <11",
     "winston": ">=3.3 <4"
   },
   "peerDependenciesMeta": {
