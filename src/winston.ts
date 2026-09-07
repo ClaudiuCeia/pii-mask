@@ -40,7 +40,10 @@ const restoreRequiredInfo = (
   message: unknown,
 ): Logform.TransformableInfo => {
   const result = createObject(null) as Record<PropertyKey, unknown>;
-  for (const key of ownKeys(protectedInfo)) {
+  const keys = ownKeys(protectedInfo);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
     if (key === "level" || key === "message") continue;
 
     const descriptor = getOwnPropertyDescriptor(protectedInfo, key);

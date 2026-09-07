@@ -473,6 +473,13 @@ describe("structured values", () => {
     expect(crossRealmResult).toBe("[REDACTED]");
   });
 
+  test("protects boxed strings nested in structured values", () => {
+    const result = redactValue({ boxed: new String("jane@example.com") });
+
+    requireObjectProjection(result);
+    expect(result.boxed).toBe("[REDACTED]");
+  });
+
   test("protects proxy-wrapped boxed strings as one value", () => {
     const result = redactValue(new Proxy(new String("jane@example.com"), {}));
 
@@ -606,6 +613,95 @@ describe("structured values", () => {
     expect(Reflect.get(result, "email")).toBe("[REDACTED]");
   });
 
+  test("uses guarded detections in reusable structured protectors", () => {
+    const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
+    if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
+    const poisonedExec = (): null => null;
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(RegExp.prototype, "exec", {
+            ...execDescriptor,
+            value: poisonedExec,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const masker = createPiiMasker({ cacheSize: 0, mode: "redact" });
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = masker.value(input);
+        replacementRestored = RegExp.prototype.exec === poisonedExec;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
+      }
+    })();
+
+    requireObjectProjection(result);
+    expect(replacementRestored).toBeTrue();
+    expect(result.email).toBe("[REDACTED]");
+  });
+
+  test("detects direct strings before traversing later proxy values", () => {
+    const getDescriptor = Object.getOwnPropertyDescriptor(Map.prototype, "get");
+    if (getDescriptor === undefined) throw new Error("Map get descriptor is missing");
+    const poisonedGet = (): undefined => undefined;
+    const trigger = new Proxy(Object.create(null) as object, {
+      ownKeys: (target) => {
+        Object.defineProperty(Map.prototype, "get", {
+          ...getDescriptor,
+          value: poisonedGet,
+        });
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue({ wallet: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT", trigger });
+      } finally {
+        Object.defineProperty(Map.prototype, "get", getDescriptor);
+      }
+    })();
+
+    requireObjectProjection(result);
+    expect(result.wallet).toBe("[REDACTED]");
+  });
+
+  test("runs replacement callbacks before traversing later values", () => {
+    const events: string[] = [];
+    const replacementError = new Error("Replacement failed");
+    const later = new Proxy(Object.create(null) as object, {
+      ownKeys: (target) => {
+        events.push("traverse-later");
+        return Reflect.ownKeys(target);
+      },
+    });
+    let thrown: unknown;
+
+    try {
+      redactValue(
+        { email: "jane@example.com", later },
+        {
+          replacement: () => {
+            events.push("callback");
+            throw replacementError;
+          },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBe(replacementError);
+    expect(events).toEqual(["callback"]);
+  });
+
   test("uses captured Math.min after proxy traversal", () => {
     const minDescriptor = Object.getOwnPropertyDescriptor(Math, "min");
     if (minDescriptor === undefined) throw new Error("Math.min descriptor is missing");
@@ -705,6 +801,216 @@ describe("structured values", () => {
     expect(result.email).toBe("[REDACTED]");
   });
 
+  test("protects detector string methods after proxy traversal", () => {
+    const lastIndexOfDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "lastIndexOf");
+    if (lastIndexOfDescriptor === undefined) {
+      throw new Error("String lastIndexOf descriptor is missing");
+    }
+    const poisonedLastIndexOf = (): number => 1000;
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(String.prototype, "lastIndexOf", {
+            configurable: true,
+            value: poisonedLastIndexOf,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored = String.prototype.lastIndexOf === poisonedLastIndexOf;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(String.prototype, "lastIndexOf", lastIndexOfDescriptor);
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    requireObjectProjection(result);
+    expect(result.email).toBe("[REDACTED]");
+  });
+
+  test("protects detector regular expression methods after proxy traversal", () => {
+    const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
+    if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
+    const poisonedExec = (): null => null;
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(RegExp.prototype, "exec", {
+            configurable: true,
+            value: poisonedExec,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored = RegExp.prototype.exec === poisonedExec;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    requireObjectProjection(result);
+    expect(result.email).toBe("[REDACTED]");
+  });
+
+  test("protects detector numeric dependencies after proxy traversal", () => {
+    const numberDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Number");
+    if (numberDescriptor === undefined) throw new Error("Global Number descriptor is missing");
+    const poisonedNumber = (): number => 0;
+    const input = new Proxy(
+      { wallet: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(globalThis, "Number", {
+            ...numberDescriptor,
+            value: poisonedNumber,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored = globalThis.Number === poisonedNumber;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(globalThis, "Number", numberDescriptor);
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    requireObjectProjection(result);
+    expect(result.wallet).toBe("[REDACTED]");
+  });
+
+  test("protects detector iterator steps after proxy traversal", () => {
+    const arrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]()) as object;
+    const stringIteratorPrototype = Object.getPrototypeOf(""[Symbol.iterator]()) as object;
+    const arrayNextDescriptor = Object.getOwnPropertyDescriptor(arrayIteratorPrototype, "next");
+    const stringNextDescriptor = Object.getOwnPropertyDescriptor(stringIteratorPrototype, "next");
+    if (arrayNextDescriptor === undefined)
+      throw new Error("Array iterator next descriptor is missing");
+    if (stringNextDescriptor === undefined) {
+      throw new Error("String iterator next descriptor is missing");
+    }
+    const poisonedArrayNext = (): never => {
+      throw new Error("Poisoned array iterator must not run");
+    };
+    const poisonedStringNext = (): IteratorResult<string, undefined> => ({
+      done: true,
+      value: undefined,
+    });
+    const input = new Proxy(
+      { wallet: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT" },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(arrayIteratorPrototype, "next", {
+            configurable: true,
+            value: poisonedArrayNext,
+            writable: true,
+          });
+          Object.defineProperty(stringIteratorPrototype, "next", {
+            configurable: true,
+            value: poisonedStringNext,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let arrayReplacementRestored = false;
+    let stringReplacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        arrayReplacementRestored =
+          Object.getOwnPropertyDescriptor(arrayIteratorPrototype, "next")?.value ===
+          poisonedArrayNext;
+        stringReplacementRestored =
+          Object.getOwnPropertyDescriptor(stringIteratorPrototype, "next")?.value ===
+          poisonedStringNext;
+        return protectedValue;
+      } finally {
+        Object.defineProperty(arrayIteratorPrototype, "next", arrayNextDescriptor);
+        Object.defineProperty(stringIteratorPrototype, "next", stringNextDescriptor);
+      }
+    })();
+
+    expect(arrayReplacementRestored).toBeTrue();
+    expect(stringReplacementRestored).toBeTrue();
+    requireObjectProjection(result);
+    expect(result.wallet).toBe("[REDACTED]");
+  });
+
+  test("restores exact detector descriptors after detection", () => {
+    const filterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
+    const lastIndexOfDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "lastIndexOf");
+    const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
+    if (filterDescriptor === undefined) throw new Error("Array filter descriptor is missing");
+    if (lastIndexOfDescriptor === undefined) {
+      throw new Error("String lastIndexOf descriptor is missing");
+    }
+    if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
+    const accessor = (): typeof filterDescriptor.value => filterDescriptor.value;
+    const callerFilterDescriptor = {
+      configurable: true,
+      enumerable: false,
+      get: accessor,
+    } as const;
+    const callerExecDescriptor = {
+      ...execDescriptor,
+      enumerable: !execDescriptor.enumerable,
+    };
+    let restoredFilterDescriptor: PropertyDescriptor | undefined;
+    let restoredLastIndexOfDescriptor: PropertyDescriptor | undefined;
+    let restoredExecDescriptor: PropertyDescriptor | undefined;
+    let protectedValue = "";
+
+    try {
+      Object.defineProperty(Array.prototype, "filter", callerFilterDescriptor);
+      Reflect.deleteProperty(String.prototype, "lastIndexOf");
+      Object.defineProperty(RegExp.prototype, "exec", callerExecDescriptor);
+      protectedValue = redactValue("jane@example.com");
+      restoredFilterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
+      restoredLastIndexOfDescriptor = Object.getOwnPropertyDescriptor(
+        String.prototype,
+        "lastIndexOf",
+      );
+      restoredExecDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
+    } finally {
+      Object.defineProperty(Array.prototype, "filter", filterDescriptor);
+      Object.defineProperty(String.prototype, "lastIndexOf", lastIndexOfDescriptor);
+      Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
+    }
+
+    expect(protectedValue).toBe("[REDACTED]");
+    expect(restoredFilterDescriptor).toEqual(callerFilterDescriptor);
+    expect(restoredLastIndexOfDescriptor).toBeUndefined();
+    expect(restoredExecDescriptor).toEqual(callerExecDescriptor);
+  });
+
   test("protects crypto detection from a replaced array fill method", () => {
     const fillDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "fill");
     if (fillDescriptor === undefined) throw new Error("Array fill descriptor is missing");
@@ -738,13 +1044,16 @@ describe("structured values", () => {
     expect(result.wallet).toBe("[REDACTED]");
   });
 
-  test("restores detector array methods when detection throws", () => {
+  test("restores detector methods when detection throws", () => {
     const filterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
-    const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
     if (filterDescriptor === undefined) throw new Error("Array filter descriptor is missing");
-    if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
     const poisonedFilter = (): never[] => [];
     const detectorError = new Error("Detector failed");
+    const invalidInput = new Proxy(Object.create(null) as object, {
+      get: () => {
+        throw detectorError;
+      },
+    }) as unknown as string;
     let replacementRestored = false;
     let thrown: unknown;
 
@@ -753,21 +1062,14 @@ describe("structured values", () => {
         ...filterDescriptor,
         value: poisonedFilter,
       });
-      Object.defineProperty(RegExp.prototype, "exec", {
-        ...execDescriptor,
-        value: () => {
-          throw detectorError;
-        },
-      });
       try {
-        findPii("jane@example.com");
+        findPii(invalidInput);
       } catch (error) {
         thrown = error;
         replacementRestored = Array.prototype.filter === poisonedFilter;
       }
     } finally {
       Object.defineProperty(Array.prototype, "filter", filterDescriptor);
-      Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
     }
 
     expect(thrown).toBe(detectorError);
@@ -878,6 +1180,179 @@ describe("structured values", () => {
     }
   });
 
+  test("does not inherit array iterators installed during projection", () => {
+    const iteratorDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+    const entriesDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "entries");
+    const keysDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "keys");
+    const valuesDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "values");
+    const arrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]()) as object;
+    const arrayNextDescriptor = Object.getOwnPropertyDescriptor(arrayIteratorPrototype, "next");
+    const iteratorPrototype = Object.getPrototypeOf(arrayIteratorPrototype) as object;
+    const inheritedIteratorDescriptor = Object.getOwnPropertyDescriptor(
+      iteratorPrototype,
+      Symbol.iterator,
+    );
+    const returnDescriptor = Object.getOwnPropertyDescriptor(iteratorPrototype, "return");
+    const iteratorToJsonDescriptor = Object.getOwnPropertyDescriptor(iteratorPrototype, "toJSON");
+    if (iteratorDescriptor === undefined) throw new Error("Array iterator descriptor is missing");
+    if (entriesDescriptor === undefined) throw new Error("Array entries descriptor is missing");
+    if (keysDescriptor === undefined) throw new Error("Array keys descriptor is missing");
+    if (valuesDescriptor === undefined) throw new Error("Array values descriptor is missing");
+    if (arrayNextDescriptor === undefined) {
+      throw new Error("Array iterator next descriptor is missing");
+    }
+    if (inheritedIteratorDescriptor === undefined) {
+      throw new Error("Array iterator identity descriptor is missing");
+    }
+    const target = ["jane@example.com"];
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        const poisonedIterator = function* (): Generator<string> {
+          yield value[0] ?? "";
+        };
+        Object.defineProperties(Array.prototype, {
+          [Symbol.iterator]: {
+            configurable: true,
+            value: poisonedIterator,
+            writable: true,
+          },
+          entries: {
+            configurable: true,
+            value: poisonedIterator,
+            writable: true,
+          },
+          keys: {
+            configurable: true,
+            value: poisonedIterator,
+            writable: true,
+          },
+          values: {
+            configurable: true,
+            value: poisonedIterator,
+            writable: true,
+          },
+        });
+        Object.defineProperty(iteratorPrototype, Symbol.iterator, {
+          configurable: true,
+          value: function* (): Generator<string> {
+            yield value[0] ?? "";
+          },
+          writable: true,
+        });
+        Object.defineProperty(iteratorPrototype, "return", {
+          configurable: true,
+          value: (): never => {
+            throw new Error("Poisoned iterator return must not run");
+          },
+          writable: true,
+        });
+        Object.defineProperty(iteratorPrototype, "toJSON", {
+          configurable: true,
+          value: () => value[0],
+          writable: true,
+        });
+        Object.defineProperty(arrayIteratorPrototype, "next", {
+          configurable: true,
+          value: (): never => {
+            throw new Error("Poisoned array iterator must not run");
+          },
+          writable: true,
+        });
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    let iterated: unknown[] = [];
+    let iteratedEntries: unknown[] = [];
+    let iteratedKeys: unknown[] = [];
+    let iteratedValues: unknown[] = [];
+    let iteratorTag = "";
+    let iteratorAliasesValues = false;
+    let detachedValuesThrew = false;
+    let borrowedValues: unknown[] = [];
+    let iteratorJson = "";
+    let earlyExitSucceeded = false;
+    let iteratorPrototypeIsNull = false;
+    try {
+      const result = redactValue(input);
+      if (!Array.isArray(result)) throw new Error("Expected a protected array");
+      iteratorTag = Object.prototype.toString.call(result[Symbol.iterator]());
+      iteratorAliasesValues = result[Symbol.iterator] === result.values;
+      iterated = [...result];
+      iteratedEntries = [...result.entries()];
+      iteratedKeys = [...result.keys()];
+      iteratedValues = [...result.values()];
+      const valuesIterator = result.values();
+      iteratorPrototypeIsNull = Object.getPrototypeOf(valuesIterator) === null;
+      iteratorJson = JSON.stringify(valuesIterator);
+      for (const _value of result) {
+        earlyExitSucceeded = true;
+        break;
+      }
+      const detachedValues = result.values as unknown as () => ArrayIterator<unknown>;
+      try {
+        detachedValues();
+      } catch (error) {
+        detachedValuesThrew = error instanceof TypeError;
+      }
+      borrowedValues = [...Reflect.apply(result.values, ["safe"], [])];
+    } finally {
+      Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+      Object.defineProperty(Array.prototype, "entries", entriesDescriptor);
+      Object.defineProperty(Array.prototype, "keys", keysDescriptor);
+      Object.defineProperty(Array.prototype, "values", valuesDescriptor);
+      Object.defineProperty(arrayIteratorPrototype, "next", arrayNextDescriptor);
+      Object.defineProperty(iteratorPrototype, Symbol.iterator, inheritedIteratorDescriptor);
+      if (returnDescriptor === undefined) Reflect.deleteProperty(iteratorPrototype, "return");
+      else Object.defineProperty(iteratorPrototype, "return", returnDescriptor);
+      if (iteratorToJsonDescriptor === undefined)
+        Reflect.deleteProperty(iteratorPrototype, "toJSON");
+      else Object.defineProperty(iteratorPrototype, "toJSON", iteratorToJsonDescriptor);
+    }
+
+    expect(iteratorTag).toBe("[object Array Iterator]");
+    expect(iteratorAliasesValues).toBeTrue();
+    expect(detachedValuesThrew).toBeTrue();
+    expect(borrowedValues).toEqual(["safe"]);
+    expect(iteratorJson).toBe("{}");
+    expect(earlyExitSucceeded).toBeTrue();
+    expect(iteratorPrototypeIsNull).toBeTrue();
+    expect(iterated).toEqual(["[REDACTED]"]);
+    expect(iteratedEntries).toEqual([[0, "[REDACTED]"]]);
+    expect(iteratedKeys).toEqual([0]);
+    expect(iteratedValues).toEqual(["[REDACTED]"]);
+  });
+
+  test("does not use poisoned array iteration while projecting Error keys", () => {
+    const arrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]()) as object;
+    const nextDescriptor = Object.getOwnPropertyDescriptor(arrayIteratorPrototype, "next");
+    if (nextDescriptor === undefined) throw new Error("Array iterator next descriptor is missing");
+    const target = Object.assign(new Error("safe"), { email: "jane@example.com" });
+    const input = new Proxy(target, {
+      ownKeys: (error) => {
+        Object.defineProperty(arrayIteratorPrototype, "next", {
+          configurable: true,
+          value: (): never => {
+            throw new Error("Poisoned array iterator must not run");
+          },
+          writable: true,
+        });
+        return Reflect.ownKeys(error);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue(input);
+      } finally {
+        Object.defineProperty(arrayIteratorPrototype, "next", nextDescriptor);
+      }
+    })();
+
+    if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+    expect(Reflect.get(result, "email")).toBe("[REDACTED]");
+  });
+
   test("does not inherit Error inspection hooks installed during projection", () => {
     const inspectKey = Symbol.for("nodejs.util.inspect.custom");
     const inspectDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, inspectKey);
@@ -902,6 +1377,31 @@ describe("structured values", () => {
         Object.defineProperty(Error.prototype, inspectKey, inspectDescriptor);
       }
     }
+  });
+
+  test("does not inherit an Error name installed during projection", () => {
+    const nameDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, "name");
+    if (nameDescriptor === undefined) throw new Error("Error name descriptor is missing");
+    const input = new Proxy(new Error("safe"), {
+      ownKeys: (error) => {
+        Object.defineProperty(Error.prototype, "name", {
+          ...nameDescriptor,
+          value: "jane@example.com",
+        });
+        return Reflect.ownKeys(error);
+      },
+    });
+
+    let result: Error;
+    try {
+      const protectedValue = redactValue(input);
+      if (!(protectedValue instanceof Error)) throw new Error("Expected a protected Error");
+      result = protectedValue;
+    } finally {
+      Object.defineProperty(Error.prototype, "name", nameDescriptor);
+    }
+
+    expect(String(result)).toBe("Error: safe");
   });
 
   test("does not inherit coercion hooks installed during array projection", () => {
@@ -1124,6 +1624,21 @@ describe("createPiiMasker", () => {
     const second = masker.text("Email jane@example.com");
     expect(first).toBe("Email ****************");
     expect(second).toBe(first);
+  });
+
+  test("reuses cached structured replacements", () => {
+    let replacements = 0;
+    const masker = createPiiMasker({
+      mode: "redact",
+      replacement: () => {
+        replacements += 1;
+        return "[REDACTED]";
+      },
+    });
+
+    expect(masker.value({ email: "jane@example.com" })).toEqual({ email: "[REDACTED]" });
+    expect(masker.value({ email: "jane@example.com" })).toEqual({ email: "[REDACTED]" });
+    expect(replacements).toBe(1);
   });
 
   test("counts reentrant cache inserts once", () => {

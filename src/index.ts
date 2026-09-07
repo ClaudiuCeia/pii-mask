@@ -272,23 +272,37 @@ type CanonicalArrayIndex<Key> = Key extends string
 type DataDescriptor = PropertyDescriptor & { value: unknown };
 
 interface ProtectedIntrinsic {
-  readonly descriptor: DataDescriptor;
+  readonly descriptor: PropertyDescriptor | undefined;
   readonly key: PropertyKey;
   readonly target: object;
 }
 
 const NativeArray = Array;
+const NativeDataView = DataView;
 const NativeError = Error;
 const NativeMap = Map;
+const NativeNumber = Number;
 const NativeObjectPrototype = Object.prototype;
+const NativeRegExp = RegExp;
+const NativeSet = Set;
+const NativeString = String;
+const NativeUint8Array = Uint8Array;
 const NativeWeakMap = WeakMap;
+const arrayEntries = NativeArray.prototype.entries;
+const arrayIterator = NativeArray.prototype[Symbol.iterator];
+const arrayKeys = NativeArray.prototype.keys;
+const arrayJoin = NativeArray.prototype.join;
 const arraySort = NativeArray.prototype.sort;
+const arrayValues = NativeArray.prototype.values;
 const arrayIsArray = NativeArray.isArray;
 const createObject = Object.create;
+const defineProperties = Object.defineProperties;
 const defineProperty = Object.defineProperty;
 const errorIsError = NativeError.isError;
+const errorToString = NativeError.prototype.toString;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const getPrototypeOf = Object.getPrototypeOf;
+const setPrototypeOf = Object.setPrototypeOf;
 const mapDelete = NativeMap.prototype.delete;
 const mapGet = NativeMap.prototype.get;
 const mapHas = NativeMap.prototype.has;
@@ -301,6 +315,28 @@ const numberIsSafeInteger = Number.isSafeInteger;
 const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const reflectDeleteProperty = Reflect.deleteProperty;
+const textEncoderDescriptor = getOwnPropertyDescriptor(globalThis, "TextEncoder");
+const NativeTextEncoderPrototype = (() => {
+  if (textEncoderDescriptor === undefined) return undefined;
+  const constructor =
+    "value" in textEncoderDescriptor
+      ? textEncoderDescriptor.value
+      : textEncoderDescriptor.get === undefined
+        ? undefined
+        : reflectApply(textEncoderDescriptor.get, globalThis, []);
+  if (typeof constructor !== "function") return undefined;
+  const prototype: unknown = Reflect.get(constructor, "prototype");
+  return typeof prototype === "object" && prototype !== null ? prototype : undefined;
+})();
+const arrayIteratorPrototype = getPrototypeOf(reflectApply(arrayIterator, [], []));
+const arrayIteratorNext = arrayIteratorPrototype.next as () => IteratorResult<unknown>;
+const stringIterator = NativeString.prototype[Symbol.iterator];
+const stringIteratorPrototype = getPrototypeOf(reflectApply(stringIterator, "", []));
+const setIterator = NativeSet.prototype[Symbol.iterator];
+const setIteratorPrototype = getPrototypeOf(reflectApply(setIterator, new NativeSet(), []));
+const iteratorPrototype = getPrototypeOf(arrayIteratorPrototype);
+const NativeTypedArray = getPrototypeOf(NativeUint8Array);
+const NativeTypedArrayPrototype = getPrototypeOf(NativeUint8Array.prototype);
 const customInspect = Symbol.for("nodejs.util.inspect.custom");
 const denoCustomInspect = Symbol.for("Deno.customInspect");
 const repeatString = Function.prototype.call.bind(String.prototype.repeat) as (
@@ -363,30 +399,154 @@ const detectorArrayPrototypeKeys = [
   "slice",
   "sort",
 ] as const;
-
+const detectorStringKeys = ["fromCharCode", "fromCodePoint"] as const;
+const detectorStringPrototypeKeys = [
+  Symbol.iterator,
+  "charAt",
+  "charCodeAt",
+  "codePointAt",
+  "endsWith",
+  "includes",
+  "indexOf",
+  "lastIndexOf",
+  "localeCompare",
+  "match",
+  "padEnd",
+  "padStart",
+  "repeat",
+  "replace",
+  "replaceAll",
+  "slice",
+  "split",
+  "startsWith",
+  "substring",
+  "toLowerCase",
+  "toUpperCase",
+] as const;
+const detectorRegExpPrototypeKeys = [
+  Symbol.match,
+  Symbol.matchAll,
+  Symbol.replace,
+  Symbol.search,
+  Symbol.split,
+  "exec",
+  "test",
+] as const;
 const protectedDetectorIntrinsics = [
   { target: globalThis, key: "Array", descriptor: captureDataDescriptor(globalThis, "Array") },
   ...captureIntrinsics(NativeArray, detectorArrayKeys),
   ...captureIntrinsics(NativeArray.prototype, detectorArrayPrototypeKeys),
+  ...captureIntrinsics(arrayIteratorPrototype, ["next"]),
+  {
+    target: iteratorPrototype,
+    key: "return",
+    descriptor: getOwnPropertyDescriptor(iteratorPrototype, "return"),
+  },
 ] as const satisfies readonly ProtectedIntrinsic[];
 
-const withProtectedDetectorIntrinsics = <T>(operation: () => T): T => {
+const protectedStructuredDetectorIntrinsics = [
+  ...protectedDetectorIntrinsics,
+  { target: globalThis, key: "Map", descriptor: captureDataDescriptor(globalThis, "Map") },
+  { target: globalThis, key: "Math", descriptor: captureDataDescriptor(globalThis, "Math") },
+  { target: globalThis, key: "Number", descriptor: captureDataDescriptor(globalThis, "Number") },
+  { target: globalThis, key: "RegExp", descriptor: captureDataDescriptor(globalThis, "RegExp") },
+  { target: globalThis, key: "Set", descriptor: captureDataDescriptor(globalThis, "Set") },
+  { target: globalThis, key: "String", descriptor: captureDataDescriptor(globalThis, "String") },
+  {
+    target: globalThis,
+    key: "TextEncoder",
+    descriptor: textEncoderDescriptor,
+  },
+  {
+    target: globalThis,
+    key: "Uint8Array",
+    descriptor: captureDataDescriptor(globalThis, "Uint8Array"),
+  },
+  {
+    target: globalThis,
+    key: "Uint32Array",
+    descriptor: captureDataDescriptor(globalThis, "Uint32Array"),
+  },
+  {
+    target: globalThis,
+    key: "DataView",
+    descriptor: captureDataDescriptor(globalThis, "DataView"),
+  },
+  { target: globalThis, key: "WeakMap", descriptor: captureDataDescriptor(globalThis, "WeakMap") },
+  ...captureIntrinsics(NativeMap.prototype, ["delete", "get", "has", "keys", "set"]),
+  {
+    target: NativeMap.prototype,
+    key: "size",
+    descriptor: getOwnPropertyDescriptor(NativeMap.prototype, "size"),
+  },
+  ...captureIntrinsics(getPrototypeOf(reflectApply(mapKeys, new NativeMap(), [])), ["next"]),
+  ...captureIntrinsics(NativeNumber, ["isFinite", "isInteger", "isNaN", "isSafeInteger"]),
+  ...captureIntrinsics(NativeRegExp.prototype, detectorRegExpPrototypeKeys),
+  {
+    target: NativeRegExp.prototype,
+    key: "flags",
+    descriptor: getOwnPropertyDescriptor(NativeRegExp.prototype, "flags"),
+  },
+  {
+    target: NativeRegExp.prototype,
+    key: "source",
+    descriptor: getOwnPropertyDescriptor(NativeRegExp.prototype, "source"),
+  },
+  ...captureIntrinsics(NativeSet.prototype, [Symbol.iterator, "add", "has"]),
+  ...captureIntrinsics(setIteratorPrototype, ["next"]),
+  ...captureIntrinsics(NativeString, detectorStringKeys),
+  ...captureIntrinsics(NativeString.prototype, detectorStringPrototypeKeys),
+  ...captureIntrinsics(stringIteratorPrototype, ["next"]),
+  ...(NativeTextEncoderPrototype === undefined
+    ? []
+    : captureIntrinsics(NativeTextEncoderPrototype, ["encode"])),
+  ...captureIntrinsics(NativeTypedArray, ["from"]),
+  ...captureIntrinsics(NativeTypedArrayPrototype, ["fill", "set", "slice", "subarray"]),
+  ...captureIntrinsics(NativeDataView.prototype, ["getUint32", "setUint32"]),
+  ...captureIntrinsics(NativeWeakMap.prototype, ["get", "set"]),
+  ...captureIntrinsics(Math, ["floor", "max", "min", "trunc"]),
+  { target: globalThis, key: "atob", descriptor: getOwnPropertyDescriptor(globalThis, "atob") },
+  {
+    target: globalThis,
+    key: "parseInt",
+    descriptor: captureDataDescriptor(globalThis, "parseInt"),
+  },
+  { target: JSON, key: "parse", descriptor: captureDataDescriptor(JSON, "parse") },
+] as const satisfies readonly ProtectedIntrinsic[];
+
+const dataDescriptorsEqual = (
+  left: PropertyDescriptor | undefined,
+  right: PropertyDescriptor | undefined,
+): boolean => {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.configurable !== right.configurable || left.enumerable !== right.enumerable)
+    return false;
+  if ("value" in left || "value" in right) {
+    return (
+      "value" in left &&
+      "value" in right &&
+      left.value === right.value &&
+      left.writable === right.writable
+    );
+  }
+  return left.get === right.get && left.set === right.set;
+};
+
+const withProtectedDetectorIntrinsics = <T>(
+  operation: () => T,
+  intrinsics: readonly ProtectedIntrinsic[] = protectedDetectorIntrinsics,
+): T => {
   const changedDescriptors: (PropertyDescriptor | undefined)[] = [];
+  const changedBeforeOperation: boolean[] = [];
   const changedIndexes: number[] = [];
   let changedCount = 0;
 
   try {
-    for (let index = 0; index < protectedDetectorIntrinsics.length; index += 1) {
-      const intrinsic = protectedDetectorIntrinsics[index];
+    for (let index = 0; index < intrinsics.length; index += 1) {
+      const intrinsic = intrinsics[index];
       if (intrinsic === undefined) continue;
       const current = getOwnPropertyDescriptor(intrinsic.target, intrinsic.key);
-      if (
-        current !== undefined &&
-        "value" in current &&
-        current.value === intrinsic.descriptor.value
-      ) {
-        continue;
-      }
+      if (dataDescriptorsEqual(current, intrinsic.descriptor)) continue;
       defineProperty(changedDescriptors, changedCount, {
         configurable: true,
         enumerable: true,
@@ -399,15 +559,50 @@ const withProtectedDetectorIntrinsics = <T>(operation: () => T): T => {
         value: index,
         writable: true,
       });
-      defineProperty(intrinsic.target, intrinsic.key, intrinsic.descriptor);
+      defineProperty(changedBeforeOperation, index, {
+        configurable: true,
+        enumerable: true,
+        value: true,
+        writable: true,
+      });
+      if (intrinsic.descriptor === undefined) {
+        if (!reflectDeleteProperty(intrinsic.target, intrinsic.key)) {
+          throw new TypeError("Unable to protect detector intrinsic");
+        }
+      } else {
+        defineProperty(intrinsic.target, intrinsic.key, intrinsic.descriptor);
+      }
       changedCount += 1;
     }
     return operation();
   } finally {
+    for (let index = intrinsics.length - 1; index >= 0; index -= 1) {
+      const intrinsic = intrinsics[index];
+      if (intrinsic === undefined) continue;
+      const protectsStringOperation =
+        intrinsic.target === NativeString ||
+        intrinsic.target === NativeString.prototype ||
+        intrinsic.target === stringIteratorPrototype ||
+        (intrinsic.target === globalThis && intrinsic.key === "String");
+      if (
+        !protectsStringOperation ||
+        getOwnPropertyDescriptor(changedBeforeOperation, index) !== undefined
+      ) {
+        continue;
+      }
+      const current = getOwnPropertyDescriptor(intrinsic.target, intrinsic.key);
+      if (!dataDescriptorsEqual(current, intrinsic.descriptor)) {
+        if (intrinsic.descriptor === undefined) {
+          reflectDeleteProperty(intrinsic.target, intrinsic.key);
+        } else {
+          defineProperty(intrinsic.target, intrinsic.key, intrinsic.descriptor);
+        }
+      }
+    }
     for (let index = changedCount - 1; index >= 0; index -= 1) {
       const intrinsicIndex = changedIndexes[index];
       if (intrinsicIndex === undefined) continue;
-      const intrinsic = protectedDetectorIntrinsics[intrinsicIndex];
+      const intrinsic = intrinsics[intrinsicIndex];
       if (intrinsic === undefined) continue;
       const descriptor = changedDescriptors[index];
       if (descriptor === undefined) {
@@ -420,6 +615,7 @@ const withProtectedDetectorIntrinsics = <T>(operation: () => T): T => {
 };
 
 const detector = Duckling(PIIParsers);
+const extractPii = (input: string): PIIEntity[] => detector.extract(input);
 
 const getSeen = (seen: WeakMap<object, unknown>, input: object): unknown =>
   reflectApply(weakMapGet, seen, [input]);
@@ -428,12 +624,23 @@ const setSeen = (seen: WeakMap<object, unknown>, input: object, output: unknown)
   reflectApply(weakMapSet, seen, [input, output]);
 };
 
+const safeValueOf = function (this: unknown): unknown {
+  return this;
+};
+
+const safeArrayToString = function (this: unknown): string {
+  return reflectApply(arrayJoin, this, [","]) as string;
+};
+
+const safeErrorToString = function (this: unknown): string {
+  return reflectApply(errorToString, this, []) as string;
+};
+
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] =>
-  withProtectedDetectorIntrinsics(() => detector.extract(input));
+  withProtectedDetectorIntrinsics(() => extractPii(input));
 
-const selectedEntities = (input: string, kinds?: readonly PIIKind[]): PIIEntity[] => {
-  const entities = findPii(input);
+const selectedEntities = (entities: PIIEntity[], kinds?: readonly PIIKind[]): PIIEntity[] => {
   if (kinds === undefined) return entities;
 
   const selected: PIIEntity[] = [];
@@ -494,35 +701,62 @@ const naturalNumber = (name: string, value: number | undefined): number => {
   return value;
 };
 
-/** Mask detected PII while optionally preserving leading or trailing characters. */
-export const maskText = (input: string, options: MaskOptions = {}): string => {
+interface ResolvedMaskOptions {
+  readonly keepEnd: number;
+  readonly keepStart: number;
+  readonly mask: string;
+}
+
+const resolveMaskOptions = (options: MaskOptions): ResolvedMaskOptions => {
   const mask = options.mask ?? "*";
   if (mask.length === 0) throw new RangeError("mask must not be empty");
+  return {
+    keepEnd: naturalNumber("keepEnd", options.keepEnd),
+    keepStart: naturalNumber("keepStart", options.keepStart),
+    mask,
+  };
+};
 
-  const keepStart = naturalNumber("keepStart", options.keepStart);
-  const keepEnd = naturalNumber("keepEnd", options.keepEnd);
-  const entities = selectedEntities(input, options.kinds);
-
-  return replaceEntities(input, entities, (entity) => {
+const maskDetectedText = (
+  input: string,
+  entities: PIIEntity[],
+  kinds: readonly PIIKind[] | undefined,
+  options: ResolvedMaskOptions,
+): string => {
+  const selected = selectedEntities(entities, kinds);
+  return replaceEntities(input, selected, (entity) => {
     const length = entity.end - entity.start;
-    const visibleStart = mathMin(keepStart, length);
-    const visibleEnd = mathMin(keepEnd, length - visibleStart);
+    const visibleStart = mathMin(options.keepStart, length);
+    const visibleEnd = mathMin(options.keepEnd, length - visibleStart);
     return (
       sliceString(entity.text, 0, visibleStart) +
-      repeatString(mask, length - visibleStart - visibleEnd) +
+      repeatString(options.mask, length - visibleStart - visibleEnd) +
       sliceString(entity.text, length - visibleEnd)
     );
   });
 };
 
-/** Replace each detected PII span with a fixed or entity-aware value. */
-export const redactText = (input: string, options: RedactOptions = {}): string => {
+/** Mask detected PII while optionally preserving leading or trailing characters. */
+export const maskText = (input: string, options: MaskOptions = {}): string => {
+  const resolved = resolveMaskOptions(options);
+  return maskDetectedText(input, findPii(input), options.kinds, resolved);
+};
+
+const redactDetectedText = (
+  input: string,
+  entities: PIIEntity[],
+  options: RedactOptions,
+): string => {
   const replacement = options.replacement ?? "[REDACTED]";
-  const entities = selectedEntities(input, options.kinds);
-  return replaceEntities(input, entities, (entity) =>
+  const selected = selectedEntities(entities, options.kinds);
+  return replaceEntities(input, selected, (entity) =>
     typeof replacement === "function" ? replacement(entity) : replacement,
   );
 };
+
+/** Replace each detected PII span with a fixed or entity-aware value. */
+export const redactText = (input: string, options: RedactOptions = {}): string =>
+  redactDetectedText(input, findPii(input), options);
 
 const unboxString = (value: object): string | undefined => {
   try {
@@ -594,6 +828,143 @@ interface ErrorSnapshot {
   readonly stack: DataDescriptor | undefined;
 }
 
+interface PendingString {
+  readonly descriptor: DataDescriptor;
+  readonly key: PropertyKey;
+  readonly target: object;
+  readonly value: string;
+}
+
+type ValueTransform = ((input: string, entities: PIIEntity[]) => string) & {
+  readonly peek?: (input: string) => string | undefined;
+};
+
+type CachedTextTransform = ((input: string, entities?: PIIEntity[]) => string) & {
+  readonly peek?: (input: string) => string | undefined;
+};
+
+const transformOneString = (input: string, transform: ValueTransform): string => {
+  const cached = transform.peek?.(input);
+  if (cached !== undefined) return cached;
+  const entities = withProtectedDetectorIntrinsics(
+    () => extractPii(input),
+    protectedStructuredDetectorIntrinsics,
+  );
+  return transform(input, entities);
+};
+
+const appendPendingString = (pendingStrings: PendingString[], pending: PendingString): void => {
+  defineProperty(pendingStrings, pendingStrings.length, {
+    configurable: true,
+    enumerable: true,
+    value: pending,
+    writable: true,
+  });
+};
+
+const projectStringProperty = (
+  target: object,
+  key: PropertyKey,
+  descriptor: DataDescriptor,
+  value: string,
+  pendingStrings: PendingString[],
+  eagerTransform: ValueTransform | undefined,
+): void => {
+  if (eagerTransform !== undefined) {
+    defineProperty(target, key, {
+      ...descriptor,
+      value: transformOneString(value, eagerTransform),
+    });
+    return;
+  }
+  defineProperty(target, key, {
+    configurable: true,
+    enumerable: descriptor.enumerable ?? false,
+    value: undefined,
+    writable: true,
+  });
+  appendPendingString(pendingStrings, { descriptor, key, target, value });
+};
+
+const flushPendingStrings = (pendingStrings: PendingString[], transform: ValueTransform): void => {
+  if (pendingStrings.length === 0) return;
+  if (pendingStrings.length === 1) {
+    const pending = pendingStrings[0];
+    if (pending === undefined) return;
+    const cached = transform.peek?.(pending.value);
+    if (cached !== undefined) {
+      defineProperty(pending.target, pending.key, {
+        ...pending.descriptor,
+        value: cached,
+      });
+      defineProperty(pendingStrings, "length", { value: 0 });
+      return;
+    }
+    const entities = withProtectedDetectorIntrinsics(
+      () => extractPii(pending.value),
+      protectedStructuredDetectorIntrinsics,
+    );
+    defineProperty(pending.target, pending.key, {
+      ...pending.descriptor,
+      value: transform(pending.value, entities),
+    });
+    defineProperty(pendingStrings, "length", { value: 0 });
+    return;
+  }
+
+  const pendingEntities: PIIEntity[][] = [];
+  const cachedValues: (string | undefined)[] = [];
+  const detectedByInput = new NativeMap<string, PIIEntity[]>();
+  withProtectedDetectorIntrinsics(() => {
+    for (let index = 0; index < pendingStrings.length; index += 1) {
+      const pending = pendingStrings[index];
+      if (pending === undefined) continue;
+      const cached = transform.peek?.(pending.value);
+      if (cached !== undefined) {
+        defineProperty(cachedValues, index, {
+          configurable: true,
+          enumerable: true,
+          value: cached,
+          writable: true,
+        });
+        continue;
+      }
+      let entities = reflectApply(mapGet, detectedByInput, [pending.value]) as
+        | PIIEntity[]
+        | undefined;
+      if (entities === undefined) {
+        entities = extractPii(pending.value);
+        reflectApply(mapSet, detectedByInput, [pending.value, entities]);
+      }
+      defineProperty(pendingEntities, index, {
+        configurable: true,
+        enumerable: true,
+        value: entities,
+        writable: true,
+      });
+    }
+  }, protectedStructuredDetectorIntrinsics);
+
+  for (let index = 0; index < pendingStrings.length; index += 1) {
+    const pending = pendingStrings[index];
+    const cached = cachedValues[index];
+    if (pending !== undefined && cached !== undefined) {
+      defineProperty(pending.target, pending.key, {
+        ...pending.descriptor,
+        value: cached,
+      });
+      continue;
+    }
+    const entities = pendingEntities[index];
+    if (pending === undefined || entities === undefined) continue;
+    defineProperty(pending.target, pending.key, {
+      ...pending.descriptor,
+      value: transform(pending.value, entities),
+    });
+  }
+  defineProperty(pendingStrings, "length", { value: 0 });
+};
+
 const snapshotError = (input: object, branded: boolean): ErrorSnapshot | undefined => {
   if (!branded && typeof input === "function") return undefined;
 
@@ -615,113 +986,193 @@ const snapshotError = (input: object, branded: boolean): ErrorSnapshot | undefin
 const transformError = (
   error: object,
   snapshot: ErrorSnapshot,
-  transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
   sparseArrays: unknown[][],
+  pendingStrings: PendingString[],
+  eagerTransform: ValueTransform | undefined,
 ): Error => {
   const message =
     snapshot.message !== undefined && typeof snapshot.message.value === "string"
       ? snapshot.message.value
       : "";
-  const transformed = new NativeError(transform(message));
-  defineProperty(transformed, "stack", {
-    configurable: true,
-    writable: true,
-    value: undefined,
-  });
-  defineProperty(transformed, "toJSON", {
-    configurable: true,
-    writable: true,
-    value: undefined,
-  });
-  defineProperty(transformed, Symbol.toPrimitive, {
-    configurable: true,
-    writable: true,
-    value: undefined,
-  });
-  defineProperty(transformed, customInspect, {
-    configurable: true,
-    writable: true,
-    value: undefined,
-  });
-  defineProperty(transformed, denoCustomInspect, {
-    configurable: true,
-    writable: true,
-    value: undefined,
+  const transformed = new NativeError(message === "" ? "" : undefined);
+  defineProperties(transformed, {
+    name: { configurable: true, value: "Error", writable: true },
+    stack: { configurable: true, writable: true, value: undefined },
+    toJSON: { configurable: true, writable: true, value: undefined },
+    toString: { configurable: true, writable: true, value: safeErrorToString },
+    valueOf: { configurable: true, writable: true, value: safeValueOf },
+    [Symbol.toPrimitive]: { configurable: true, writable: true, value: undefined },
+    [Symbol.toStringTag]: { configurable: true, writable: true, value: undefined },
+    [customInspect]: { configurable: true, writable: true, value: undefined },
+    [denoCustomInspect]: { configurable: true, writable: true, value: undefined },
   });
   setSeen(seen, error, transformed);
 
+  if (snapshot.message !== undefined && typeof snapshot.message.value === "string") {
+    projectStringProperty(
+      transformed,
+      "message",
+      snapshot.message,
+      snapshot.message.value,
+      pendingStrings,
+      eagerTransform,
+    );
+  }
+
   if (snapshot.name !== undefined && typeof snapshot.name.value === "string") {
-    defineProperty(transformed, "name", {
-      ...snapshot.name,
-      value: transform(snapshot.name.value),
-    });
+    projectStringProperty(
+      transformed,
+      "name",
+      snapshot.name,
+      snapshot.name.value,
+      pendingStrings,
+      eagerTransform,
+    );
   }
 
   if (snapshot.stack !== undefined && typeof snapshot.stack.value === "string") {
-    defineProperty(transformed, "stack", {
-      ...snapshot.stack,
-      value: transform(snapshot.stack.value),
-    });
+    projectStringProperty(
+      transformed,
+      "stack",
+      snapshot.stack,
+      snapshot.stack.value,
+      pendingStrings,
+      eagerTransform,
+    );
   }
 
   if (snapshot.cause !== undefined) {
-    defineProperty(transformed, "cause", {
-      ...snapshot.cause,
-      value: transformValue(snapshot.cause.value, transform, seen, sparseArrays),
-    });
+    defineProjectedProperty(
+      transformed,
+      "cause",
+      snapshot.cause,
+      seen,
+      sparseArrays,
+      pendingStrings,
+      eagerTransform,
+    );
   }
 
-  for (const key of ownKeys(error)) {
+  const keys = ownKeys(error);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
     if (key === "name" || key === "message" || key === "stack" || key === "cause") {
       continue;
     }
     const descriptor = getOwnDataDescriptor(error, key);
     if (descriptor?.enumerable) {
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
-      defineProperty(transformed, key, {
-        ...descriptor,
-        value: transformValue(descriptor.value, transform, seen, sparseArrays),
-      });
+      defineProjectedProperty(
+        transformed,
+        key,
+        descriptor,
+        seen,
+        sparseArrays,
+        pendingStrings,
+        eagerTransform,
+      );
     }
   }
 
   return transformed;
 };
 
-const transformValue = (
-  input: unknown,
-  transform: (input: string) => string,
+const createArrayIterator = (
+  values: unknown,
+  factory: (this: unknown) => ArrayIterator<unknown>,
+): ArrayIterator<unknown> => {
+  const iterator = reflectApply(factory, values, []);
+  setPrototypeOf(iterator, null);
+  defineProperties(iterator, {
+    next: { configurable: true, value: arrayIteratorNext, writable: true },
+    [Symbol.iterator]: {
+      configurable: true,
+      value: function (this: ArrayIterator<unknown>): ArrayIterator<unknown> {
+        return this;
+      },
+      writable: true,
+    },
+    [Symbol.toStringTag]: { configurable: true, value: "Array Iterator" },
+  });
+  return iterator;
+};
+
+const safeArrayEntries = function (this: unknown): ArrayIterator<unknown> {
+  return createArrayIterator(this, arrayEntries);
+};
+
+const safeArrayKeys = function (this: unknown): ArrayIterator<unknown> {
+  return createArrayIterator(this, arrayKeys);
+};
+
+const safeArrayValues = function (this: unknown): ArrayIterator<unknown> {
+  return createArrayIterator(this, arrayValues);
+};
+
+const defineProjectedProperty = (
+  target: object,
+  key: PropertyKey,
+  descriptor: DataDescriptor,
   seen: WeakMap<object, unknown>,
   sparseArrays: unknown[][],
-): unknown => {
-  if (typeof input === "string") return transform(input);
-  if ((typeof input !== "object" && typeof input !== "function") || input === null) return input;
+  pendingStrings: PendingString[],
+  eagerTransform: ValueTransform | undefined,
+): void => {
+  if (typeof descriptor.value === "string") {
+    projectStringProperty(
+      target,
+      key,
+      descriptor,
+      descriptor.value,
+      pendingStrings,
+      eagerTransform,
+    );
+    return;
+  }
+  const value = transformValue(
+    descriptor.value,
+    seen,
+    sparseArrays,
+    pendingStrings,
+    eagerTransform,
+  );
+  if (typeof value === "string" && eagerTransform === undefined) {
+    projectStringProperty(target, key, descriptor, value, pendingStrings, eagerTransform);
+    return;
+  }
+  defineProperty(target, key, { ...descriptor, value });
+};
 
+const transformValue = (
+  input: unknown,
+  seen: WeakMap<object, unknown>,
+  sparseArrays: unknown[][],
+  pendingStrings: PendingString[],
+  eagerTransform: ValueTransform | undefined,
+): unknown => {
+  if (typeof input === "string") {
+    return eagerTransform === undefined ? input : transformOneString(input, eagerTransform);
+  }
+  if ((typeof input !== "object" && typeof input !== "function") || input === null) return input;
   const existing = getSeen(seen, input);
   if (existing !== undefined) return existing;
 
   if (arrayIsArray(input)) {
     const result: unknown[] = [];
-    defineProperty(result, "toJSON", {
-      configurable: true,
-      writable: true,
-      value: undefined,
-    });
-    defineProperty(result, Symbol.toPrimitive, {
-      configurable: true,
-      writable: true,
-      value: undefined,
-    });
-    defineProperty(result, customInspect, {
-      configurable: true,
-      writable: true,
-      value: undefined,
-    });
-    defineProperty(result, denoCustomInspect, {
-      configurable: true,
-      writable: true,
-      value: undefined,
+    defineProperties(result, {
+      toJSON: { configurable: true, writable: true, value: undefined },
+      entries: { configurable: true, writable: true, value: safeArrayEntries },
+      keys: { configurable: true, writable: true, value: safeArrayKeys },
+      toString: { configurable: true, writable: true, value: safeArrayToString },
+      valueOf: { configurable: true, writable: true, value: safeValueOf },
+      values: { configurable: true, writable: true, value: safeArrayValues },
+      [Symbol.iterator]: { configurable: true, writable: true, value: safeArrayValues },
+      [Symbol.toPrimitive]: { configurable: true, writable: true, value: undefined },
+      [Symbol.toStringTag]: { configurable: true, writable: true, value: undefined },
+      [customInspect]: { configurable: true, writable: true, value: undefined },
+      [denoCustomInspect]: { configurable: true, writable: true, value: undefined },
     });
     setSeen(seen, input, result);
     const lengthDescriptor = getOwnDataDescriptor(input, "length");
@@ -735,12 +1186,20 @@ const transformValue = (
         skippedIndex = true;
         continue;
       }
-      defineProperty(result, index, {
-        configurable: true,
-        enumerable: true,
-        writable: true,
-        value: transformValue(descriptor.value, transform, seen, sparseArrays),
-      });
+      defineProjectedProperty(
+        result,
+        index,
+        {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: descriptor.value,
+        },
+        seen,
+        sparseArrays,
+        pendingStrings,
+        eagerTransform,
+      );
     }
     if (skippedIndex) {
       defineProperty(sparseArrays, sparseArrays.length, {
@@ -758,12 +1217,23 @@ const transformValue = (
   if (brandedError) {
     const errorSnapshot = snapshotError(input, true);
     if (errorSnapshot !== undefined) {
-      return transformError(input, errorSnapshot, transform, seen, sparseArrays);
+      return transformError(
+        input,
+        errorSnapshot,
+        seen,
+        sparseArrays,
+        pendingStrings,
+        eagerTransform,
+      );
     }
   }
 
   const boxedString = probeBoxedString(input);
-  if (boxedString.kind === "value") return transform(boxedString.value);
+  if (boxedString.kind === "value") {
+    return eagerTransform === undefined
+      ? boxedString.value
+      : transformOneString(boxedString.value, eagerTransform);
+  }
   if (boxedString.kind === "invalid") {
     const result = createObject(null) as Record<PropertyKey, unknown>;
     setSeen(seen, input, result);
@@ -772,19 +1242,27 @@ const transformValue = (
 
   const errorSnapshot = snapshotError(input, false);
   if (errorSnapshot !== undefined) {
-    return transformError(input, errorSnapshot, transform, seen, sparseArrays);
+    return transformError(input, errorSnapshot, seen, sparseArrays, pendingStrings, eagerTransform);
   }
 
   const result = createObject(null) as Record<PropertyKey, unknown>;
   setSeen(seen, input, result);
-  for (const key of ownKeys(input)) {
+  const keys = ownKeys(input);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
     const descriptor = getOwnPropertyDescriptor(input, key);
     if (descriptor?.enumerable && "value" in descriptor) {
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
-      defineProperty(result, key, {
-        ...descriptor,
-        value: transformValue(descriptor.value, transform, seen, sparseArrays),
-      });
+      defineProjectedProperty(
+        result,
+        key,
+        descriptor as DataDescriptor,
+        seen,
+        sparseArrays,
+        pendingStrings,
+        eagerTransform,
+      );
     }
   }
   return result;
@@ -815,41 +1293,70 @@ const finalizeSparseArrays = (sparseArrays: unknown[][]): void => {
   }
 };
 
-const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> => {
+const protectValue = <T>(input: T, transform: ValueTransform, eager = false): ProtectedValue<T> => {
   const sparseArrays: unknown[][] = [];
-  const result = transformValue(input, transform, new NativeWeakMap(), sparseArrays);
+  const pendingStrings: PendingString[] = [];
+  const result = transformValue(
+    input,
+    new NativeWeakMap(),
+    sparseArrays,
+    pendingStrings,
+    eager ? transform : undefined,
+  );
+  if (typeof result === "string") {
+    if (eager) return result as ProtectedValue<T>;
+    const cached = transform.peek?.(result);
+    if (cached !== undefined) return cached as ProtectedValue<T>;
+    const entities = withProtectedDetectorIntrinsics(
+      () => extractPii(result),
+      protectedStructuredDetectorIntrinsics,
+    );
+    return transform(result, entities) as ProtectedValue<T>;
+  }
+  flushPendingStrings(pendingStrings, transform);
   finalizeSparseArrays(sparseArrays);
   return result as ProtectedValue<T>;
 };
 
 /** Mask strings nested in structured data. */
-export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> =>
-  protectValue(input, (value) => maskText(value, options));
+export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> => {
+  const resolved = resolveMaskOptions(options);
+  return protectValue(input, (value, entities) =>
+    maskDetectedText(value, entities, options.kinds, resolved),
+  );
+};
 
 /** Redact strings nested in structured data. */
 export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> =>
-  protectValue(input, (value) => redactText(value, options));
+  protectValue(
+    input,
+    (value, entities) => redactDetectedText(value, entities, options),
+    typeof options.replacement === "function",
+  );
 
 const DEFAULT_CACHE_SIZE = 1024;
 
 const withCache = (
-  transform: (input: string) => string,
+  transform: (input: string, entities?: PIIEntity[]) => string,
   cacheSize: number,
-): ((input: string) => string) => {
+): CachedTextTransform => {
   if (cacheSize === 0) return transform;
 
   const cache = new NativeMap<string, string>();
   let size = 0;
-  return (input) => {
+  const lookup = (input: string): string | undefined => {
     const hit = reflectApply(mapGet, cache, [input]) as string | undefined;
-    if (hit !== undefined) {
-      // Refresh recency.
-      reflectApply(mapDelete, cache, [input]);
-      reflectApply(mapSet, cache, [input, hit]);
-      return hit;
-    }
+    if (hit === undefined) return undefined;
+    reflectApply(mapDelete, cache, [input]);
+    reflectApply(mapSet, cache, [input, hit]);
+    return hit;
+  };
 
-    const transformed = transform(input);
+  const cachedTransform = ((input: string, entities?: PIIEntity[]): string => {
+    const hit = lookup(input);
+    if (hit !== undefined) return hit;
+
+    const transformed = transform(input, entities);
     const insertedReentrantly = reflectApply(mapHas, cache, [input]) as boolean;
     if (insertedReentrantly) {
       reflectApply(mapDelete, cache, [input]);
@@ -867,7 +1374,9 @@ const withCache = (
     reflectApply(mapSet, cache, [input, transformed]);
     size += 1;
     return transformed;
-  };
+  }) as CachedTextTransform;
+  defineProperty(cachedTransform, "peek", { value: lookup });
+  return cachedTransform;
 };
 
 /** Create a reusable text and structured-value protector. */
@@ -877,14 +1386,25 @@ export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
     throw new RangeError("cacheSize must be a non-negative safe integer");
   }
 
-  const base =
-    options.mode === "redact"
-      ? (input: string) => redactText(input, options)
-      : (input: string) => maskText(input, options);
+  const base = (input: string, entities?: PIIEntity[]): string => {
+    if (options.mode === "redact") {
+      return entities === undefined
+        ? redactText(input, options)
+        : redactDetectedText(input, entities, options);
+    }
+    return entities === undefined
+      ? maskText(input, options)
+      : maskDetectedText(input, entities, options.kinds, resolveMaskOptions(options));
+  };
   const transform = withCache(base, cacheSize);
 
   return {
     text: transform,
-    value: <T>(input: T): ProtectedValue<T> => protectValue(input, transform),
+    value: <T>(input: T): ProtectedValue<T> =>
+      protectValue(
+        input,
+        transform,
+        options.mode === "redact" && typeof options.replacement === "function",
+      ),
   };
 };
