@@ -291,6 +291,7 @@ const NativeObjectPrototype = Object.prototype;
 const NativeRegExp = RegExp;
 const NativeSet = Set;
 const NativeString = String;
+const NativeUint32Array = Uint32Array;
 const NativeUint8Array = Uint8Array;
 const NativeWeakMap = WeakMap;
 const arrayEntries = NativeArray.prototype.entries;
@@ -395,6 +396,24 @@ const captureIntrinsics = (
   return intrinsics;
 };
 
+const captureIntrinsicOverrides = (
+  target: object,
+  keys: readonly PropertyKey[],
+): readonly ProtectedIntrinsic[] => {
+  const intrinsics: ProtectedIntrinsic[] = [];
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
+    defineProperty(intrinsics, index, {
+      configurable: true,
+      enumerable: true,
+      value: { descriptor: getOwnPropertyDescriptor(target, key), key, target },
+      writable: true,
+    });
+  }
+  return intrinsics;
+};
+
 const detectorArrayKeys = ["from", "isArray"] as const;
 const detectorArrayPrototypeKeys = [
   Symbol.iterator,
@@ -445,6 +464,18 @@ const detectorRegExpPrototypeKeys = [
   Symbol.split,
   "exec",
   "test",
+] as const;
+const detectorTypedArrayKeys = [Symbol.hasInstance, "from", "of"] as const;
+const detectorTypedArrayPrototypeKeys = [
+  "buffer",
+  "byteLength",
+  "byteOffset",
+  "constructor",
+  "fill",
+  "length",
+  "set",
+  "slice",
+  "subarray",
 ] as const;
 const protectedDetectorIntrinsics = [
   { target: globalThis, key: "Array", descriptor: captureDataDescriptor(globalThis, "Array") },
@@ -514,7 +545,7 @@ const protectedStructuredDetectorIntrinsics = [
   ...(NativeTextEncoderPrototype === undefined
     ? []
     : captureIntrinsics(NativeTextEncoderPrototype, ["encode"])),
-  ...captureIntrinsics(NativeTypedArray, ["from"]),
+  ...captureIntrinsics(NativeTypedArray, ["from", "of"]),
   ...captureIntrinsics(NativeTypedArrayPrototype, ["fill", "set", "slice", "subarray"]),
   {
     target: NativeTypedArrayPrototype,
@@ -536,6 +567,10 @@ const protectedStructuredDetectorIntrinsics = [
     key: "length",
     descriptor: getOwnPropertyDescriptor(NativeTypedArrayPrototype, "length"),
   },
+  ...captureIntrinsicOverrides(NativeUint8Array, detectorTypedArrayKeys),
+  ...captureIntrinsicOverrides(NativeUint8Array.prototype, detectorTypedArrayPrototypeKeys),
+  ...captureIntrinsicOverrides(NativeUint32Array, detectorTypedArrayKeys),
+  ...captureIntrinsicOverrides(NativeUint32Array.prototype, detectorTypedArrayPrototypeKeys),
   ...captureIntrinsics(NativeDataView.prototype, ["getUint32", "setUint32"]),
   ...captureIntrinsics(NativeWeakMap.prototype, ["get", "set"]),
   ...captureIntrinsics(Math, ["floor", "max", "min", "trunc"]),
@@ -798,22 +833,28 @@ const protectedErrorDescriptors = (() => {
 })();
 
 const shadowErrorPrototypeAdditions = (error: Error): void => {
-  const sources = [NativeObjectPrototype, NativeError.prototype];
-  for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
-    const source = sources[sourceIndex];
-    if (source === undefined) continue;
+  if (
+    getPrototypeOf(NativeError.prototype) !== NativeObjectPrototype ||
+    getPrototypeOf(NativeObjectPrototype) !== null
+  ) {
+    setPrototypeOf(error, null);
+    return;
+  }
+  let source: object | null = NativeError.prototype;
+  while (source !== null) {
     const keys = ownKeys(source);
     for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
       const key = keys[keyIndex];
       if (key === undefined || getOwnPropertyDescriptor(error, key) !== undefined) continue;
       defineProperty(error, key, { configurable: true, value: undefined, writable: true });
     }
+    source = getPrototypeOf(source);
   }
 };
 
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] =>
-  withProtectedDetectorIntrinsics(() => extractPii(input));
+  withProtectedDetectorIntrinsics(() => extractPii(input), protectedStructuredDetectorIntrinsics);
 
 const selectedEntities = (entities: PIIEntity[], kinds?: readonly PIIKind[]): PIIEntity[] => {
   if (kinds === undefined) return entities;
@@ -1210,34 +1251,40 @@ const transformError = (
   });
   setSeen(seen, error, transformed);
 
-  if (snapshot.message !== undefined && typeof snapshot.message.value === "string") {
-    projectStringProperty(
+  if (snapshot.message !== undefined) {
+    defineProjectedProperty(
       transformed,
       "message",
       snapshot.message,
-      snapshot.message.value,
+      seen,
+      sparseArrays,
+      protectedErrors,
       pendingStrings,
       eagerTransform,
     );
   }
 
-  if (snapshot.name !== undefined && typeof snapshot.name.value === "string") {
-    projectStringProperty(
+  if (snapshot.name !== undefined) {
+    defineProjectedProperty(
       transformed,
       "name",
       snapshot.name,
-      snapshot.name.value,
+      seen,
+      sparseArrays,
+      protectedErrors,
       pendingStrings,
       eagerTransform,
     );
   }
 
-  if (snapshot.stack !== undefined && typeof snapshot.stack.value === "string") {
-    projectStringProperty(
+  if (snapshot.stack !== undefined) {
+    defineProjectedProperty(
       transformed,
       "stack",
       snapshot.stack,
-      snapshot.stack.value,
+      seen,
+      sparseArrays,
+      protectedErrors,
       pendingStrings,
       eagerTransform,
     );

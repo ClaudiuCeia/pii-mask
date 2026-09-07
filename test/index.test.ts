@@ -346,6 +346,33 @@ describe("structured values", () => {
     expect(Reflect.get(result, "account")).toBe("[REDACTED]");
   });
 
+  test("projects non-string Error diagnostic fields", () => {
+    const branded = new Error("safe");
+    Object.defineProperties(branded, {
+      message: { configurable: true, value: { email: "jane@example.com" }, writable: true },
+      name: { configurable: true, value: { host: "192.168.0.1" }, writable: true },
+      stack: { configurable: true, value: { account: "jane@example.com" }, writable: true },
+    });
+    const structural = Object.create(null) as object;
+    Object.defineProperties(structural, {
+      message: { configurable: true, value: { email: "jane@example.com" }, writable: true },
+      stack: { configurable: true, value: "Request from 192.168.0.1", writable: true },
+    });
+
+    const brandedResult = redactValue(branded);
+    const structuralResult = redactValue(structural);
+
+    if (typeof brandedResult === "string") throw new Error("Expected a protected Error");
+    expect<unknown>(Reflect.get(brandedResult, "message")).toEqual({ email: "[REDACTED]" });
+    expect<unknown>(Reflect.get(brandedResult, "name")).toEqual({ host: "[REDACTED]" });
+    expect<unknown>(Reflect.get(brandedResult, "stack")).toEqual({ account: "[REDACTED]" });
+    if (!(structuralResult instanceof Error)) throw new Error("Expected a protected Error");
+    expect<unknown>(Reflect.get(structuralResult, "message")).toEqual({
+      email: "[REDACTED]",
+    });
+    expect(structuralResult.stack).toBe("Request from [REDACTED]");
+  });
+
   test("protects errors across realms", () => {
     const input: unknown = runInNewContext('new Error("Request from 192.168.0.1")');
     const result = redactValue(input);
@@ -1146,6 +1173,66 @@ describe("structured values", () => {
     expect(result.wallet).toBe("[REDACTED]");
   });
 
+  test("protects crypto detection from concrete typed-array overrides", () => {
+    const setDescriptor = Object.getOwnPropertyDescriptor(Uint8Array.prototype, "set");
+    const poisonedSet = (): never => {
+      throw new Error("Poisoned concrete typed-array method must not run");
+    };
+    const input = new Proxy(
+      Object.assign(() => undefined, {
+        wallet: "0x5AEDA56215b167893e80B4fE645BA6d5Bab767DE",
+      }),
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(Uint8Array.prototype, "set", {
+            configurable: true,
+            value: poisonedSet,
+            writable: true,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored = Uint8Array.prototype.set === poisonedSet;
+        return protectedValue;
+      } finally {
+        if (setDescriptor === undefined) Reflect.deleteProperty(Uint8Array.prototype, "set");
+        else Object.defineProperty(Uint8Array.prototype, "set", setDescriptor);
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    expect(result.wallet).toBe("[REDACTED]");
+  });
+
+  test("protects public text crypto detection from concrete typed-array overrides", () => {
+    const setDescriptor = Object.getOwnPropertyDescriptor(Uint8Array.prototype, "set");
+    const poisonedSet = (): never => {
+      throw new Error("Poisoned concrete typed-array method must not run");
+    };
+    const wallet = "0x5AEDA56215b167893e80B4fE645BA6d5Bab767DE";
+
+    try {
+      Object.defineProperty(Uint8Array.prototype, "set", {
+        configurable: true,
+        value: poisonedSet,
+        writable: true,
+      });
+      expect(findPii(wallet).some((entity) => entity.kind === "crypto_address")).toBeTrue();
+      expect(maskText(wallet)).not.toBe(wallet);
+      expect(redactText(wallet)).toBe("[REDACTED]");
+      expect(Uint8Array.prototype.set).toBe(poisonedSet);
+    } finally {
+      if (setDescriptor === undefined) Reflect.deleteProperty(Uint8Array.prototype, "set");
+      else Object.defineProperty(Uint8Array.prototype, "set", setDescriptor);
+    }
+  });
+
   test("restores detector methods when detection throws", () => {
     const filterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
     if (filterDescriptor === undefined) throw new Error("Array filter descriptor is missing");
@@ -1676,6 +1763,43 @@ describe("structured values", () => {
     }
   });
 
+  test("shadows additions from Error prototype chains replaced during projection", () => {
+    const originalPrototype = Object.getPrototypeOf(Error.prototype);
+    const insertedTarget = Object.create(originalPrototype) as object;
+    let ownKeysCalls = 0;
+    const insertedPrototype = new Proxy(insertedTarget, {
+      ownKeys: (target) => {
+        ownKeysCalls += 1;
+        const keys = Reflect.ownKeys(target);
+        Object.defineProperty(target, "leak", {
+          configurable: true,
+          enumerable: true,
+          value: "jane@example.com",
+        });
+        return keys;
+      },
+    });
+    const input = new Proxy(new Error("jane@example.com"), {
+      getOwnPropertyDescriptor: (error, key) => {
+        if (key === "message") Object.setPrototypeOf(Error.prototype, insertedPrototype);
+        return Object.getOwnPropertyDescriptor(error, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (typeof result === "string") throw new Error("Expected a protected Error");
+      const inheritedKeys: PropertyKey[] = [];
+      for (const key in result) inheritedKeys.push(key);
+      expect(Reflect.get(result, "leak")).toBeUndefined();
+      expect(Object.getPrototypeOf(result)).toBeNull();
+      expect(ownKeysCalls).toBe(0);
+      expect(inheritedKeys).not.toContain("leak");
+    } finally {
+      Object.setPrototypeOf(Error.prototype, originalPrototype);
+    }
+  });
+
   test("does not inherit coercion hooks installed during array projection", () => {
     const coercionDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.toPrimitive);
     const target = ["jane@example.com"];
@@ -1984,7 +2108,7 @@ describe("createPiiMasker", () => {
     expect(replacements).toBe(1);
   });
 
-  test("does not trust text cache entries seeded during structured traversal", () => {
+  test("protects reentrant text detection during structured traversal", () => {
     const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
     if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
     const masker = createPiiMasker({ mode: "redact" });
@@ -1995,7 +2119,7 @@ describe("createPiiMasker", () => {
           ...execDescriptor,
           value: (): null => null,
         });
-        expect(masker.text(email)).toBe(email);
+        expect(masker.text(email)).toBe("[REDACTED]");
         return Reflect.ownKeys(target);
       },
     });
