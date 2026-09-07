@@ -171,6 +171,8 @@ protector.value({ ip: "192.168.1.20" });
 
 `maskValue` and `redactValue` recursively transform string values in arrays, plain objects, and errors. They preserve cycles and return a copy without mutating the input. Dates, buffers, maps, sets, and other class instances are retained as-is.
 
+Their `ProtectedValue<T>` return type widens transformed string literals, preserves tuple structure, and represents transformed error subtypes as `Error`. Object types expose optional non-callable data because runtime traversal cannot guarantee that accessors, methods, or subclass state are copied. Non-tuple arrays retain their element type without promising array-subclass members.
+
 The optional cache is local to each protector. Every LRU entry retains the original input string as its key and the transformed string as its value. Set `cacheSize: 0` for short-lived sensitive values or environments where this retention is undesirable.
 
 ## Performance

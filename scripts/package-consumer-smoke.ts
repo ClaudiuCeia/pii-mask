@@ -75,8 +75,15 @@ const createConsumer = async (
 
   if (typecheck) {
     const imports = [
-      'import { maskText } from "@claudiu-ceia/pii-mask";',
+      'import { maskText, redactValue, type ProtectedValue } from "@claudiu-ceia/pii-mask";',
       'const masked: string = maskText("jane@example.com");',
+      "type Equal<Left, Right> = (<Value>() => Value extends Left ? 1 : 2) extends (<Value>() => Value extends Right ? 1 : 2) ? true : false;",
+      'const protectedText = redactValue("jane@example.com" as const);',
+      "const textType: Equal<typeof protectedText, string> = true;",
+      'const protectedRecord: ProtectedValue<{ readonly email: "jane@example.com" }> = redactValue({ email: "jane@example.com" } as const);',
+      "const recordType: Equal<typeof protectedRecord, { readonly email?: string }> = true;",
+      "void textType;",
+      "void recordType;",
     ];
     if (modes.includes("pino")) {
       imports.push(

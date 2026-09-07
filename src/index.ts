@@ -55,8 +55,29 @@ export interface PiiMasker {
   /** Protect PII in one string. */
   text(input: string): string;
   /** Protect every string in a plain object, array, or Error without mutating it. */
-  value<T>(input: T): T;
+  value<T>(input: T): ProtectedValue<T>;
 }
+
+/** Result type for a value copied through a PII transformation. */
+export type ProtectedValue<T> = T extends string
+  ? string
+  : T extends Error
+    ? Error
+    : T extends (...arguments_: never[]) => unknown
+      ? T
+      : T extends readonly unknown[]
+        ? number extends T["length"]
+          ? T extends unknown[]
+            ? Array<ProtectedValue<T[number]>>
+            : ReadonlyArray<ProtectedValue<T[number]>>
+          : { [K in keyof T]: ProtectedValue<T[K]> }
+        : T extends object
+          ? {
+              [
+                K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+              ]?: ProtectedValue<T[K]>;
+            }
+          : T;
 
 const detector = Duckling(PIIParsers);
 
@@ -207,15 +228,15 @@ const transformValue = (
   return result;
 };
 
-const protectValue = <T>(input: T, transform: (input: string) => string): T =>
-  transformValue(input, transform, new WeakMap()) as T;
+const protectValue = <T>(input: T, transform: (input: string) => string): ProtectedValue<T> =>
+  transformValue(input, transform, new WeakMap()) as ProtectedValue<T>;
 
 /** Mask every string nested in a plain object, array, or Error. */
-export const maskValue = <T>(input: T, options: MaskOptions = {}): T =>
+export const maskValue = <T>(input: T, options: MaskOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => maskText(value, options));
 
 /** Redact every string nested in a plain object, array, or Error. */
-export const redactValue = <T>(input: T, options: RedactOptions = {}): T =>
+export const redactValue = <T>(input: T, options: RedactOptions = {}): ProtectedValue<T> =>
   protectValue(input, (value) => redactText(value, options));
 
 const DEFAULT_CACHE_SIZE = 1024;
@@ -261,6 +282,6 @@ export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
 
   return {
     text: transform,
-    value: <T>(input: T) => protectValue(input, transform),
+    value: <T>(input: T): ProtectedValue<T> => protectValue(input, transform),
   };
 };
