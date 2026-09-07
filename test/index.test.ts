@@ -438,7 +438,7 @@ describe("structured values", () => {
         },
       },
     );
-    const masker = createPiiMasker({ mode: "redact" });
+    const masker = createPiiMasker({ cacheSize: 1024, mode: "redact" });
 
     const result = (() => {
       try {
