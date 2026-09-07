@@ -120,7 +120,7 @@ type ProtectedRetainedValue<T> = T extends readonly unknown[]
   : ProtectedValue<T>;
 
 type ProtectedRetainedArray<T extends readonly unknown[]> =
-  | PossibleArrayString<T>
+  | PossibleArraySpecialOutput<T>
   | ProtectedRetainedActualArray<T>
   | ProtectedArrayObject<T>;
 
@@ -147,14 +147,14 @@ type ObjectPrototypeKey =
   | "valueOf";
 
 type ProtectedArray<T extends readonly unknown[]> =
-  | PossibleArrayString<T>
+  | PossibleArraySpecialOutput<T>
   | ProtectedActualArray<T>
   | ProtectedArrayObject<T>;
 
-type PossibleArrayString<T extends readonly unknown[]> = unknown[] extends T
-  ? string
+type PossibleArraySpecialOutput<T extends readonly unknown[]> = unknown[] extends T
+  ? string | Error
   : readonly unknown[] extends T
-    ? string
+    ? string | Error
     : never;
 
 type ProtectedActualArray<T extends readonly unknown[]> =
@@ -520,6 +520,26 @@ const protectedStructuredDetectorIntrinsics = [
     : captureIntrinsics(NativeTextEncoderPrototype, ["encode"])),
   ...captureIntrinsics(NativeTypedArray, ["from"]),
   ...captureIntrinsics(NativeTypedArrayPrototype, ["fill", "set", "slice", "subarray"]),
+  {
+    target: NativeTypedArrayPrototype,
+    key: "buffer",
+    descriptor: getOwnPropertyDescriptor(NativeTypedArrayPrototype, "buffer"),
+  },
+  {
+    target: NativeTypedArrayPrototype,
+    key: "byteLength",
+    descriptor: getOwnPropertyDescriptor(NativeTypedArrayPrototype, "byteLength"),
+  },
+  {
+    target: NativeTypedArrayPrototype,
+    key: "byteOffset",
+    descriptor: getOwnPropertyDescriptor(NativeTypedArrayPrototype, "byteOffset"),
+  },
+  {
+    target: NativeTypedArrayPrototype,
+    key: "length",
+    descriptor: getOwnPropertyDescriptor(NativeTypedArrayPrototype, "length"),
+  },
   ...captureIntrinsics(NativeDataView.prototype, ["getUint32", "setUint32"]),
   ...captureIntrinsics(NativeWeakMap.prototype, ["get", "set"]),
   ...captureIntrinsics(Math, ["floor", "max", "min", "trunc"]),

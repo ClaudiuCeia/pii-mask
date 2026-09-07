@@ -1085,6 +1085,65 @@ describe("structured values", () => {
     expect(result.wallet).toBe("[REDACTED]");
   });
 
+  test("protects crypto detection from replaced typed-array accessors", () => {
+    const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
+    const bufferDescriptor = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer");
+    const byteLengthDescriptor = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength");
+    const byteOffsetDescriptor = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset");
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(typedArrayPrototype, "length");
+    if (
+      bufferDescriptor === undefined ||
+      byteLengthDescriptor === undefined ||
+      byteOffsetDescriptor === undefined ||
+      lengthDescriptor === undefined
+    ) {
+      throw new Error("Typed-array accessor descriptor is missing");
+    }
+    const poisonedAccessor = (): never => {
+      throw new Error("Poisoned typed-array accessor must not run");
+    };
+    const input = new Proxy(
+      Object.assign(() => undefined, { wallet: "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2" }),
+      {
+        ownKeys: (target) => {
+          Object.defineProperties(typedArrayPrototype, {
+            buffer: { ...bufferDescriptor, get: poisonedAccessor },
+            byteLength: { ...byteLengthDescriptor, get: poisonedAccessor },
+            byteOffset: { ...byteOffsetDescriptor, get: poisonedAccessor },
+            length: { ...lengthDescriptor, get: poisonedAccessor },
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    let replacementRestored = false;
+    const result = (() => {
+      try {
+        const protectedValue = redactValue(input);
+        replacementRestored =
+          Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get ===
+            poisonedAccessor &&
+          Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")?.get ===
+            poisonedAccessor &&
+          Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset")?.get ===
+            poisonedAccessor &&
+          Object.getOwnPropertyDescriptor(typedArrayPrototype, "length")?.get === poisonedAccessor;
+        return protectedValue;
+      } finally {
+        Object.defineProperties(typedArrayPrototype, {
+          buffer: bufferDescriptor,
+          byteLength: byteLengthDescriptor,
+          byteOffset: byteOffsetDescriptor,
+          length: lengthDescriptor,
+        });
+      }
+    })();
+
+    expect(replacementRestored).toBeTrue();
+    expect(result.wallet).toBe("[REDACTED]");
+  });
+
   test("restores detector methods when detection throws", () => {
     const filterDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "filter");
     if (filterDescriptor === undefined) throw new Error("Array filter descriptor is missing");

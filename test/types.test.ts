@@ -283,6 +283,15 @@ test("transformed array types include boxed-string primitive outputs", () => {
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
+test("transformed broad array types include Error outputs", () => {
+  const input: unknown[] = Object.assign(new Error("jane@example.com"), [] as unknown[]);
+  const result = redactValue(input);
+  const errorBranch: Extends<Error, typeof result> = true;
+
+  expect(errorBranch).toBeTrue();
+  expect(result).toBeInstanceOf(Error);
+});
+
 test("transformed value types include Error outputs for diagnostic supertypes", () => {
   const input = Object.create(null) as { message: string };
   Object.defineProperty(input, "message", { value: "jane@example.com", writable: true });
