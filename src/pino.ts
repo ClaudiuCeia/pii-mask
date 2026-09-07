@@ -25,9 +25,6 @@ export class PinoOutputError extends Error {
   }
 }
 
-const isJsonWhitespace = (character: string | undefined): boolean =>
-  character === " " || character === "\n" || character === "\r" || character === "\t";
-
 const OBJECT_KEY_OR_END = 0;
 const OBJECT_KEY = 1;
 const OBJECT_COLON = 2;
@@ -38,38 +35,51 @@ const ARRAY_VALUE = 6;
 const ARRAY_COMMA_OR_END = 7;
 type JsonState = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-const isDigit = (character: string | undefined): boolean =>
-  character !== undefined && character >= "0" && character <= "9";
+const isDigitCode = (code: number): boolean => code >= 0x30 && code <= 0x39;
+
+const skipJsonWhitespace = (input: string, start: number): number => {
+  let index = start;
+  for (
+    let code = input.charCodeAt(index);
+    code === 0x20 || code === 0x0a || code === 0x0d || code === 0x09;
+  ) {
+    index += 1;
+    code = input.charCodeAt(index);
+  }
+  return index;
+};
 
 const stringEnd = (input: string, start: number): number => {
   let index = start + 1;
   while (index < input.length) {
-    const character = input[index];
-    if (character === '"') return index + 1;
-    if (character === undefined || character.charCodeAt(0) < 0x20) throw new PinoOutputError();
-    if (character !== "\\") {
+    const code = input.charCodeAt(index);
+    if (code === 0x22) return index + 1;
+    if (code < 0x20) throw new PinoOutputError();
+    if (code !== 0x5c) {
       index += 1;
       continue;
     }
 
-    const escape = input[index + 1];
-    if (escape === "u") {
-      const codePoint = input.slice(index + 2, index + 6);
-      if (codePoint.length !== 4 || !/^[0-9a-fA-F]{4}$/.test(codePoint)) {
-        throw new PinoOutputError();
+    const escape = input.charCodeAt(index + 1);
+    if (escape === 0x75) {
+      for (let offset = 2; offset < 6; offset += 1) {
+        const hex = input.charCodeAt(index + offset);
+        if (!isDigitCode(hex) && (hex < 0x41 || hex > 0x46) && (hex < 0x61 || hex > 0x66)) {
+          throw new PinoOutputError();
+        }
       }
       index += 6;
       continue;
     }
     if (
-      escape !== '"' &&
-      escape !== "\\" &&
-      escape !== "/" &&
-      escape !== "b" &&
-      escape !== "f" &&
-      escape !== "n" &&
-      escape !== "r" &&
-      escape !== "t"
+      escape !== 0x22 &&
+      escape !== 0x5c &&
+      escape !== 0x2f &&
+      escape !== 0x62 &&
+      escape !== 0x66 &&
+      escape !== 0x6e &&
+      escape !== 0x72 &&
+      escape !== 0x74
     ) {
       throw new PinoOutputError();
     }
@@ -84,26 +94,26 @@ const numberEnd = (input: string, start: number): number => {
 
   if (input[index] === "0") {
     index += 1;
-    if (isDigit(input[index])) throw new PinoOutputError();
+    if (isDigitCode(input.charCodeAt(index))) throw new PinoOutputError();
   } else {
-    const firstDigit = input[index];
-    if (firstDigit === undefined || firstDigit < "1" || firstDigit > "9") {
+    const firstDigit = input.charCodeAt(index);
+    if (firstDigit < 0x31 || firstDigit > 0x39) {
       throw new PinoOutputError();
     }
-    while (isDigit(input[index])) index += 1;
+    while (isDigitCode(input.charCodeAt(index))) index += 1;
   }
 
   if (input[index] === ".") {
     index += 1;
-    if (!isDigit(input[index])) throw new PinoOutputError();
-    while (isDigit(input[index])) index += 1;
+    if (!isDigitCode(input.charCodeAt(index))) throw new PinoOutputError();
+    while (isDigitCode(input.charCodeAt(index))) index += 1;
   }
 
   if (input[index] === "e" || input[index] === "E") {
     index += 1;
     if (input[index] === "+" || input[index] === "-") index += 1;
-    if (!isDigit(input[index])) throw new PinoOutputError();
-    while (isDigit(input[index])) index += 1;
+    if (!isDigitCode(input.charCodeAt(index))) throw new PinoOutputError();
+    while (isDigitCode(input.charCodeAt(index))) index += 1;
   }
   return index;
 };
@@ -111,14 +121,13 @@ const numberEnd = (input: string, start: number): number => {
 const transformJsonStringValues = (input: string, transform: (value: string) => string): string => {
   let result = "";
   let unchangedStart = 0;
-  let index = 0;
-  while (isJsonWhitespace(input[index])) index += 1;
+  let index = skipJsonWhitespace(input, 0);
   if (input[index] !== "{") throw new PinoOutputError();
   index += 1;
 
   const states: JsonState[] = [OBJECT_KEY_OR_END];
   while (states.length > 0) {
-    while (isJsonWhitespace(input[index])) index += 1;
+    index = skipJsonWhitespace(input, index);
     const stateIndex = states.length - 1;
     const state = states[stateIndex];
     if (state === undefined) throw new PinoOutputError();
@@ -194,7 +203,7 @@ const transformJsonStringValues = (input: string, transform: (value: string) => 
     }
   }
 
-  while (isJsonWhitespace(input[index])) index += 1;
+  index = skipJsonWhitespace(input, index);
   if (index !== input.length) throw new PinoOutputError();
   return result + input.slice(unchangedStart);
 };
