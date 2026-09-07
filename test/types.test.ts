@@ -6,8 +6,8 @@ type Equal<Left, Right> =
     ? true
     : false;
 
-type Projected<Shape> = Shape & {
-  [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: never;
+type Projected<Shape> = Readonly<Shape> & {
+  readonly [K in Exclude<ObjectPrototypeKey, keyof Shape>]?: never;
 };
 
 type ObjectPrototypeKey =
@@ -83,6 +83,13 @@ test("transformed value types conservatively represent errors and opaque objects
     name: "Error",
     message: "[REDACTED]",
   });
+
+  class MutableAccount {
+    email = "jane@example.com";
+  }
+  const retained = redactValue(new MutableAccount());
+  const retainedType: Equal<typeof retained, Projected<{ email?: string }>> = true;
+  expect(retainedType).toBeTrue();
 });
 
 test("transformed value types do not infer runtime identity structurally", () => {
@@ -164,6 +171,17 @@ test("transformed value types omit augmented tuple properties", () => {
   expect(Reflect.has(result, "tag")).toBeFalse();
 });
 
+test("transformed value types treat overridden array members as augmentations", () => {
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
+    at: "serializer@example.com" as const,
+  });
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, string[]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(typeof result.at).toBe("function");
+});
+
 test("transformed value types omit non-index numeric tuple properties", () => {
   const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
     "-1": { secret: "jane@example.com" },
@@ -176,6 +194,18 @@ test("transformed value types omit non-index numeric tuple properties", () => {
   expect(result).toEqual(["[REDACTED]"]);
   expect(Reflect.has(result, "-1")).toBeFalse();
   expect(Reflect.has(result, "01")).toBeFalse();
+});
+
+test("transformed value types omit integers outside the array-index range", () => {
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
+    "4294967295": { secret: "jane@example.com" },
+  });
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, string[]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(result).toEqual(["[REDACTED]"]);
+  expect(Reflect.has(result, "4294967295")).toBeFalse();
 });
 
 test("transformed value types preserve tuple indices with iterator overrides", () => {
@@ -265,6 +295,40 @@ test("transformed value types support long fixed tuples", () => {
 
   expect(last).toBe("[REDACTED]");
   expect(result).toHaveLength(50);
+});
+
+test("transformed value types support long variadic tuple prefixes", () => {
+  const prefix = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55,
+  ] as const;
+  const input: readonly [...typeof prefix, ...string[]] = [...prefix, "jane@example.com"];
+  const result = redactValue(input);
+  const lastPrefix: 55 = result[55];
+  const tail: string | undefined = result[56];
+
+  expect(lastPrefix).toBe(55);
+  expect(tail).toBe("[REDACTED]");
+});
+
+test("transformed value types project broad function interfaces", () => {
+  const broad: Function = () => "jane@example.com";
+  const callable: CallableFunction = () => "jane@example.com";
+  const newable: NewableFunction = class Account {};
+  const broadResult = redactValue(broad);
+  const callableResult = redactValue(callable);
+  const newableResult = redactValue(newable);
+  const broadType: Equal<typeof broadResult, Projected<object>> = true;
+  const callableType: Equal<typeof callableResult, Projected<object>> = true;
+  const newableType: Equal<typeof newableResult, Projected<object>> = true;
+
+  expect(broadType).toBeTrue();
+  expect(callableType).toBeTrue();
+  expect(newableType).toBeTrue();
+  expect(Object.getPrototypeOf(broadResult)).toBeNull();
+  expect(Object.getPrototypeOf(callableResult)).toBeNull();
+  expect(Object.getPrototypeOf(newableResult)).toBeNull();
 });
 
 test("transformed value types project construct-only functions", () => {

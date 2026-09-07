@@ -61,19 +61,27 @@ export interface PiiMasker {
 /** Result type for a value copied through a PII transformation. */
 export type ProtectedValue<T> = T extends string
   ? string
-  : T extends readonly unknown[]
-    ? T extends unknown[]
-      ? ProtectedArrayItems<T>
-      : Readonly<ProtectedArrayItems<T>>
-    : T extends object
-      ? ProtectedObject<T>
-      : T;
+  : T extends Function
+    ? ProtectedFunction<T>
+    : T extends readonly unknown[]
+      ? ProtectedArray<T>
+      : T extends object
+        ? ProtectedObject<T>
+        : T;
+
+type ProtectedFunction<T extends Function> = Function extends T
+  ? ProtectedObject<object>
+  : CallableFunction extends T
+    ? ProtectedObject<object>
+    : NewableFunction extends T
+      ? ProtectedObject<object>
+      : ProtectedObject<T>;
 
 type ProtectedObject<T extends object> = {
-  [K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K]?: ProtectedValue<
-    T[K]
-  >;
-} & { [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
+  readonly [
+    K in keyof T as T[K] extends (...arguments_: never[]) => unknown ? never : K
+  ]?: ProtectedValue<T[K]>;
+} & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
 
 type RetainedObjectPrototypeKey<T extends object> = {
   [K in Extract<ObjectPrototypeKey, keyof T>]: T[K] extends (...arguments_: never[]) => unknown
@@ -90,28 +98,99 @@ type ObjectPrototypeKey =
   | "toString"
   | "valueOf";
 
-type ProtectedArrayItems<T extends readonly unknown[]> =
-  Exclude<keyof T, keyof unknown[] | CanonicalArrayIndex<keyof T>> extends never
-    ? Array<T[number]>[typeof Symbol.iterator] extends T[typeof Symbol.iterator]
-      ? number extends T["length"]
-        ? T extends readonly [infer Head, ...infer Tail]
-          ? [ProtectedValue<Head>, ...ProtectedArrayItems<Tail>]
-          : T extends readonly [...infer Initial, infer Last]
-            ? [...ProtectedArrayItems<Initial>, ProtectedValue<Last>]
-            : "0" extends keyof T
-              ? T extends readonly [(infer Head)?, ...infer Tail]
-                ? [ProtectedValue<Head>?, ...ProtectedArrayItems<Tail>]
-                : Array<ProtectedValue<T[number]>>
-              : Array<ProtectedValue<T[number]>>
-        : { [K in keyof T]: ProtectedValue<T[K]> }
-      : Array<ProtectedValue<T[number]>>
-    : Array<ProtectedValue<T[number]>>;
+type ProtectedArray<T extends readonly unknown[]> =
+  ArrayAugmentation<T> extends never
+    ? { [K in keyof T]: ProtectedValue<T[K]> }
+    : T extends unknown[]
+      ? Array<ProtectedValue<T[number]>>
+      : ReadonlyArray<ProtectedValue<T[number]>>;
+
+type ArrayAugmentation<T extends readonly unknown[]> =
+  | Exclude<keyof T, keyof ArrayShape<T> | CanonicalArrayIndex<keyof T>>
+  | OverriddenArrayMember<T>;
+
+type ArrayShape<T extends readonly unknown[]> = T extends unknown[]
+  ? Array<T[number]>
+  : ReadonlyArray<T[number]>;
+
+type OverriddenArrayMember<
+  T extends readonly unknown[],
+  Shape extends ArrayShape<T> = ArrayShape<T>,
+> = {
+  [K in Exclude<keyof Shape, number | "length">]: K extends keyof T
+    ? Shape[K] extends T[K]
+      ? never
+      : K
+    : never;
+}[Exclude<keyof Shape, number | "length">];
+
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
+type DigitsOf<Value extends string, Result extends Digit[] = []> = Value extends ""
+  ? Result
+  : Value extends `${infer Head extends Digit}${infer Tail}`
+    ? DigitsOf<Tail, [...Result, Head]>
+    : never;
+
+type DigitRank = {
+  "0": [];
+  "1": [unknown];
+  "2": [unknown, unknown];
+  "3": [unknown, unknown, unknown];
+  "4": [unknown, unknown, unknown, unknown];
+  "5": [unknown, unknown, unknown, unknown, unknown];
+  "6": [unknown, unknown, unknown, unknown, unknown, unknown];
+  "7": [unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+  "8": [unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+  "9": [unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+};
+
+type CompareDigit<Left extends Digit, Right extends Digit> = DigitRank[Left] extends [
+  ...DigitRank[Right],
+  ...infer Extra,
+]
+  ? Extra extends []
+    ? "equal"
+    : "greater"
+  : "less";
+
+type IsAtMost<
+  Value extends string,
+  Maximum extends string,
+> = Value extends `${infer ValueHead extends Digit}${infer ValueTail}`
+  ? Maximum extends `${infer MaximumHead extends Digit}${infer MaximumTail}`
+    ? CompareDigit<ValueHead, MaximumHead> extends infer Comparison
+      ? Comparison extends "equal"
+        ? IsAtMost<ValueTail, MaximumTail>
+        : Comparison extends "less"
+          ? true
+          : false
+      : never
+    : false
+  : true;
+
+type IsArrayIndex<Value extends string> = DigitsOf<Value>["length"] extends
+  | 1
+  | 2
+  | 3
+  | 4
+  | 5
+  | 6
+  | 7
+  | 8
+  | 9
+  ? true
+  : DigitsOf<Value>["length"] extends 10
+    ? IsAtMost<Value, "4294967294">
+    : false;
 
 type CanonicalArrayIndex<Key> = Key extends string
   ? Key extends `${bigint}`
     ? Key extends `-${string}`
       ? never
-      : Key
+      : IsArrayIndex<Key> extends true
+        ? Key
+        : never
     : never
   : never;
 
