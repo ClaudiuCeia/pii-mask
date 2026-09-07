@@ -300,8 +300,15 @@ const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const customInspect = Symbol.for("nodejs.util.inspect.custom");
 const denoCustomInspect = Symbol.for("Deno.customInspect");
-const stringRepeat = String.prototype.repeat;
-const stringSlice = String.prototype.slice;
+const repeatString = Function.prototype.call.bind(String.prototype.repeat) as (
+  input: string,
+  count: number,
+) => string;
+const sliceString = Function.prototype.call.bind(String.prototype.slice) as (
+  input: string,
+  start: number,
+  end?: number,
+) => string;
 const stringValueOf = String.prototype.valueOf;
 const weakMapGet = NativeWeakMap.prototype.get;
 const weakMapSet = NativeWeakMap.prototype.set;
@@ -312,12 +319,6 @@ const getSeen = (seen: WeakMap<object, unknown>, input: object): unknown =>
 const setSeen = (seen: WeakMap<object, unknown>, input: object, output: unknown): void => {
   reflectApply(weakMapSet, seen, [input, output]);
 };
-
-const sliceString = (input: string, start: number, end?: number): string =>
-  reflectApply(stringSlice, input, end === undefined ? [start] : [start, end]) as string;
-
-const repeatString = (input: string, count: number): string =>
-  reflectApply(stringRepeat, input, [count]) as string;
 
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] => detector.extract(input);
@@ -352,24 +353,14 @@ const selectedEntities = (input: string, kinds?: readonly PIIKind[]): PIIEntity[
 
 const replaceEntities = (
   input: string,
-  entities: readonly PIIEntity[],
+  entities: PIIEntity[],
   replacement: (entity: PIIEntity) => string,
 ): string => {
   if (entities.length === 0) return input;
 
   let result = input;
   let boundary = input.length;
-  const ordered: PIIEntity[] = [];
-  for (let index = 0; index < entities.length; index += 1) {
-    const entity = entities[index];
-    if (entity === undefined) continue;
-    defineProperty(ordered, index, {
-      configurable: true,
-      enumerable: true,
-      value: entity,
-      writable: true,
-    });
-  }
+  const ordered = entities;
   reflectApply(arraySort, ordered, [
     (left: PIIEntity, right: PIIEntity) => right.start - left.start || right.end - left.end,
   ]);
