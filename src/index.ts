@@ -93,7 +93,9 @@ type ProtectedRetainedValue<T> = T extends readonly unknown[]
 
 type ProtectedRetainedArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
-    ? { readonly [K in keyof T]: ProtectedRetainedValue<T[K]> }
+    ? ArrayShape<T> extends T
+      ? ReadonlyArray<ProtectedRetainedValue<T[number]>>
+      : { readonly [K in keyof T]: ProtectedRetainedValue<T[K]> }
     : ReadonlyArray<ProtectedRetainedValue<T[number]>>;
 
 type RetainedObjectPrototypeKey<T extends object> = {
@@ -113,7 +115,11 @@ type ObjectPrototypeKey =
 
 type ProtectedArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
-    ? { [K in keyof T]: ProtectedValue<T[K]> }
+    ? ArrayShape<T> extends T
+      ? T extends unknown[]
+        ? Array<ProtectedValue<T[number]>>
+        : ReadonlyArray<ProtectedValue<T[number]>>
+      : { [K in keyof T]: ProtectedValue<T[K]> }
     : T extends unknown[]
       ? Array<ProtectedValue<T[number]>>
       : ReadonlyArray<ProtectedValue<T[number]>>;
