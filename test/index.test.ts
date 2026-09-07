@@ -225,6 +225,7 @@ describe("structured values", () => {
       }
     })();
 
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
     expect(Object.hasOwn(result, 0)).toBeTrue();
     expect(result[0]).toBeUndefined();
     expect(JSON.stringify(result)).toBe("[null]");
@@ -254,6 +255,7 @@ describe("structured values", () => {
       }
     })();
 
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
     expect(Object.hasOwn(result, 0)).toBeTrue();
     expect(result[0]).toBeUndefined();
     expect(JSON.stringify(result)).toBe("[null]");
@@ -285,6 +287,7 @@ describe("structured values", () => {
       }
     })();
 
+    if (!Array.isArray(result)) throw new Error("Expected a protected array");
     expect(Object.hasOwn(result, 0)).toBeTrue();
     expect(result[0]).toBeUndefined();
     expect(result[1]).toEqual({ safe: true });
@@ -1632,6 +1635,77 @@ describe("structured values", () => {
         Reflect.deleteProperty(Error.prototype, Symbol.toPrimitive);
       } else {
         Object.defineProperty(Error.prototype, Symbol.toPrimitive, coercionDescriptor);
+      }
+    }
+  });
+
+  test("shadows Object methods changed during Error projection", () => {
+    const localeDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, "toLocaleString");
+    if (localeDescriptor === undefined) throw new Error("Object locale descriptor is missing");
+    const target = new Error("jane@example.com");
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        if (key === "message") {
+          Object.defineProperty(Object.prototype, "toLocaleString", {
+            ...localeDescriptor,
+            value: (): string => value.message,
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+      expect(result.toLocaleString()).toBe("Error: [REDACTED]");
+      expect(Object.hasOwn(result, "toLocaleString")).toBeTrue();
+    } finally {
+      Object.defineProperty(Object.prototype, "toLocaleString", localeDescriptor);
+    }
+  });
+
+  test("shadows protocol hooks changed during Error projection", () => {
+    const hasInstanceDescriptor = Object.getOwnPropertyDescriptor(
+      Error.prototype,
+      Symbol.hasInstance,
+    );
+    const asyncDisposeDescriptor = Object.getOwnPropertyDescriptor(
+      Error.prototype,
+      Symbol.asyncDispose,
+    );
+    const disposeDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, Symbol.dispose);
+    const input = new Proxy(new Error("jane@example.com"), {
+      getOwnPropertyDescriptor: (value, key) => {
+        if (key === "message") {
+          Object.defineProperties(Error.prototype, {
+            [Symbol.asyncDispose]: { configurable: true, value: (): string => value.message },
+            [Symbol.dispose]: { configurable: true, value: (): string => value.message },
+            [Symbol.hasInstance]: { configurable: true, value: (): boolean => true },
+          });
+        }
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+      expect(Reflect.get(result, Symbol.dispose)).toBeUndefined();
+      expect(Reflect.get(result, Symbol.asyncDispose)).toBeUndefined();
+      expect(Reflect.get(result, Symbol.hasInstance)).toBeUndefined();
+    } finally {
+      if (asyncDisposeDescriptor === undefined) {
+        Reflect.deleteProperty(Error.prototype, Symbol.asyncDispose);
+      } else {
+        Object.defineProperty(Error.prototype, Symbol.asyncDispose, asyncDisposeDescriptor);
+      }
+      if (disposeDescriptor === undefined) Reflect.deleteProperty(Error.prototype, Symbol.dispose);
+      else Object.defineProperty(Error.prototype, Symbol.dispose, disposeDescriptor);
+      if (hasInstanceDescriptor === undefined) {
+        Reflect.deleteProperty(Error.prototype, Symbol.hasInstance);
+      } else {
+        Object.defineProperty(Error.prototype, Symbol.hasInstance, hasInstanceDescriptor);
       }
     }
   });

@@ -272,6 +272,17 @@ test("transformed value types include primitive outputs for boxed-string candida
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
+test("transformed array types include boxed-string primitive outputs", () => {
+  const input: unknown[] = Object.assign(new String("jane@example.com"), [] as unknown[]);
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+  const resultIsObject: Extends<typeof result, object> = false;
+
+  expect(stringBranch).toBeTrue();
+  expect(resultIsObject).toBeFalse();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
 test("transformed value types include Error outputs for diagnostic supertypes", () => {
   const input = Object.create(null) as { message: string };
   Object.defineProperty(input, "message", { value: "jane@example.com", writable: true });

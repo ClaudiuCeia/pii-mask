@@ -120,6 +120,7 @@ type ProtectedRetainedValue<T> = T extends readonly unknown[]
   : ProtectedValue<T>;
 
 type ProtectedRetainedArray<T extends readonly unknown[]> =
+  | PossibleArrayString<T>
   | ProtectedRetainedActualArray<T>
   | ProtectedArrayObject<T>;
 
@@ -146,8 +147,15 @@ type ObjectPrototypeKey =
   | "valueOf";
 
 type ProtectedArray<T extends readonly unknown[]> =
+  | PossibleArrayString<T>
   | ProtectedActualArray<T>
   | ProtectedArrayObject<T>;
+
+type PossibleArrayString<T extends readonly unknown[]> = unknown[] extends T
+  ? string
+  : readonly unknown[] extends T
+    ? string
+    : never;
 
 type ProtectedActualArray<T extends readonly unknown[]> =
   ArrayAugmentation<T> extends never
@@ -715,6 +723,64 @@ const safeErrorToString = function (this: unknown): string {
   return reflectApply(errorToString, this, []) as string;
 };
 
+const protectedErrorDescriptors = (() => {
+  const result = createObject(null) as Record<PropertyKey, PropertyDescriptor>;
+  const sources = [NativeObjectPrototype, NativeError.prototype];
+  for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    const source = sources[sourceIndex];
+    if (source === undefined) continue;
+    const keys = ownKeys(source);
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+      const key = keys[keyIndex];
+      if (key === undefined) continue;
+      const descriptor = getOwnPropertyDescriptor(source, key);
+      if (descriptor === undefined) continue;
+      defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: descriptor,
+        writable: true,
+      });
+    }
+  }
+  const overrides: Record<PropertyKey, PropertyDescriptor> = {
+    name: { configurable: true, value: "Error", writable: true },
+    stack: { configurable: true, value: undefined, writable: true },
+    // oxlint-disable-next-line unicorn/no-thenable -- Explicitly shadow inherited thenable hooks.
+    then: { configurable: true, value: undefined, writable: true },
+    toJSON: { configurable: true, value: undefined, writable: true },
+    toString: { configurable: true, value: safeErrorToString, writable: true },
+    valueOf: { configurable: true, value: safeValueOf, writable: true },
+    [Symbol.asyncIterator]: { configurable: true, value: undefined, writable: true },
+    [Symbol.asyncDispose]: { configurable: true, value: undefined, writable: true },
+    [Symbol.dispose]: { configurable: true, value: undefined, writable: true },
+    [Symbol.hasInstance]: { configurable: true, value: undefined, writable: true },
+    [Symbol.isConcatSpreadable]: { configurable: true, value: undefined, writable: true },
+    [Symbol.iterator]: { configurable: true, value: undefined, writable: true },
+    [Symbol.match]: { configurable: true, value: undefined, writable: true },
+    [Symbol.matchAll]: { configurable: true, value: undefined, writable: true },
+    [Symbol.replace]: { configurable: true, value: undefined, writable: true },
+    [Symbol.search]: { configurable: true, value: undefined, writable: true },
+    [Symbol.split]: { configurable: true, value: undefined, writable: true },
+    [Symbol.toPrimitive]: { configurable: true, value: undefined, writable: true },
+    [Symbol.toStringTag]: { configurable: true, value: undefined, writable: true },
+    [customInspect]: { configurable: true, value: undefined, writable: true },
+    [denoCustomInspect]: { configurable: true, value: undefined, writable: true },
+  };
+  const keys = ownKeys(overrides);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
+    defineProperty(result, key, {
+      configurable: true,
+      enumerable: true,
+      value: overrides[key],
+      writable: true,
+    });
+  }
+  return freezeObject(result);
+})();
+
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] =>
   withProtectedDetectorIntrinsics(() => extractPii(input));
@@ -1104,17 +1170,7 @@ const transformError = (
       ? snapshot.message.value
       : "";
   const transformed = new NativeError(message === "" ? "" : undefined);
-  defineProperties(transformed, {
-    name: { configurable: true, value: "Error", writable: true },
-    stack: { configurable: true, writable: true, value: undefined },
-    toJSON: { configurable: true, writable: true, value: undefined },
-    toString: { configurable: true, writable: true, value: safeErrorToString },
-    valueOf: { configurable: true, writable: true, value: safeValueOf },
-    [Symbol.toPrimitive]: { configurable: true, writable: true, value: undefined },
-    [Symbol.toStringTag]: { configurable: true, writable: true, value: undefined },
-    [customInspect]: { configurable: true, writable: true, value: undefined },
-    [denoCustomInspect]: { configurable: true, writable: true, value: undefined },
-  });
+  defineProperties(transformed, protectedErrorDescriptors);
   setSeen(seen, error, transformed);
 
   if (snapshot.message !== undefined && typeof snapshot.message.value === "string") {
