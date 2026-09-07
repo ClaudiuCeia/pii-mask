@@ -199,7 +199,14 @@ type CanonicalArrayIndex<Key> = Key extends string
   : never;
 
 const detector = Duckling(PIIParsers);
-const errorIsError = Error.isError;
+const NativeError = Error;
+const arrayIsArray = Array.isArray;
+const createObject = Object.create;
+const defineProperty = Object.defineProperty;
+const errorIsError = NativeError.isError;
+const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const ownKeys = Reflect.ownKeys;
+const reflectApply = Reflect.apply;
 const stringValueOf = String.prototype.valueOf;
 
 /** Find PII spans in free-form text using ts-duckling. */
@@ -275,7 +282,7 @@ export const redactText = (input: string, options: RedactOptions = {}): string =
 
 const unboxString = (value: object): string | undefined => {
   try {
-    const unboxed: unknown = Reflect.apply(stringValueOf, value, []);
+    const unboxed: unknown = reflectApply(stringValueOf, value, []);
     return typeof unboxed === "string" ? unboxed : undefined;
   } catch {
     return undefined;
@@ -287,46 +294,46 @@ const transformError = (
   transform: (input: string) => string,
   seen: WeakMap<object, unknown>,
 ): Error => {
-  const messageDescriptor = Object.getOwnPropertyDescriptor(error, "message");
+  const messageDescriptor = getOwnPropertyDescriptor(error, "message");
   const message =
     messageDescriptor && "value" in messageDescriptor && typeof messageDescriptor.value === "string"
       ? messageDescriptor.value
       : "";
-  const transformed = new Error(transform(message));
-  Object.defineProperty(transformed, "toJSON", {
+  const transformed = new NativeError(transform(message));
+  defineProperty(transformed, "toJSON", {
     configurable: true,
     writable: true,
     value: undefined,
   });
   seen.set(error, transformed);
 
-  const nameDescriptor = Object.getOwnPropertyDescriptor(error, "name");
+  const nameDescriptor = getOwnPropertyDescriptor(error, "name");
   if (nameDescriptor && "value" in nameDescriptor && typeof nameDescriptor.value === "string") {
     transformed.name = transform(nameDescriptor.value);
   }
 
-  const stackDescriptor = Object.getOwnPropertyDescriptor(error, "stack");
+  const stackDescriptor = getOwnPropertyDescriptor(error, "stack");
   if (stackDescriptor && "value" in stackDescriptor && typeof stackDescriptor.value === "string") {
     transformed.stack = transform(stackDescriptor.value);
   }
 
-  const causeDescriptor = Object.getOwnPropertyDescriptor(error, "cause");
+  const causeDescriptor = getOwnPropertyDescriptor(error, "cause");
   if (causeDescriptor && "value" in causeDescriptor) {
-    Object.defineProperty(transformed, "cause", {
+    defineProperty(transformed, "cause", {
       configurable: true,
       writable: true,
       value: transformValue(causeDescriptor.value, transform, seen),
     });
   }
 
-  for (const key of Reflect.ownKeys(error)) {
+  for (const key of ownKeys(error)) {
     if (key === "name" || key === "message" || key === "stack" || key === "cause") {
       continue;
     }
-    const descriptor = Object.getOwnPropertyDescriptor(error, key);
+    const descriptor = getOwnPropertyDescriptor(error, key);
     if (descriptor?.enumerable && "value" in descriptor) {
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
-      Object.defineProperty(transformed, key, {
+      defineProperty(transformed, key, {
         ...descriptor,
         value: transformValue(descriptor.value, transform, seen),
       });
@@ -347,18 +354,31 @@ const transformValue = (
   const existing = seen.get(input);
   if (existing !== undefined) return existing;
 
-  if (input instanceof Error || errorIsError(input)) return transformError(input, transform, seen);
+  if (input instanceof NativeError || errorIsError(input)) {
+    return transformError(input, transform, seen);
+  }
 
-  if (Array.isArray(input)) {
+  if (arrayIsArray(input)) {
     const result: unknown[] = [];
+    defineProperty(result, "toJSON", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
     seen.set(input, result);
-    for (let index = 0; index < input.length; index += 1) {
-      result.push(transformValue(input[index], transform, seen));
+    const length = input.length;
+    for (let index = 0; index < length; index += 1) {
+      defineProperty(result, index, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: transformValue(input[index], transform, seen),
+      });
     }
     return result;
   }
 
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
+  const lengthDescriptor = getOwnPropertyDescriptor(input, "length");
   if (
     lengthDescriptor !== undefined &&
     "value" in lengthDescriptor &&
@@ -371,13 +391,13 @@ const transformValue = (
     if (boxedString !== undefined) return transform(boxedString);
   }
 
-  const result = Object.create(null) as Record<PropertyKey, unknown>;
+  const result = createObject(null) as Record<PropertyKey, unknown>;
   seen.set(input, result);
-  for (const key of Reflect.ownKeys(input)) {
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+  for (const key of ownKeys(input)) {
+    const descriptor = getOwnPropertyDescriptor(input, key);
     if (descriptor?.enumerable && "value" in descriptor) {
       if (key === "toJSON" && typeof descriptor.value === "function") continue;
-      Object.defineProperty(result, key, {
+      defineProperty(result, key, {
         ...descriptor,
         value: transformValue(descriptor.value, transform, seen),
       });

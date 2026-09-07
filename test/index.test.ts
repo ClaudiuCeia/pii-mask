@@ -100,6 +100,33 @@ describe("structured values", () => {
     expect(result.self).toBe(result);
   });
 
+  test("does not dispatch through a replaced array push method", () => {
+    const inputValue = "jane@example.com";
+    const push = Array.prototype.push;
+    const input = new Proxy([inputValue], {
+      get: (target, key, receiver) => {
+        if (key === "length") {
+          Array.prototype.push = function (value): number {
+            return Reflect.apply(push, this, [value === "[REDACTED]" ? inputValue : value]);
+          };
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    const result = (() => {
+      try {
+        return redactValue(input);
+      } finally {
+        Array.prototype.push = push;
+      }
+    })();
+
+    expect(result).toEqual(["[REDACTED]"]);
+    expect(Object.hasOwn(result, "toJSON")).toBeTrue();
+    expect(JSON.stringify(result)).toBe('["[REDACTED]"]');
+  });
+
   test("protects Error messages, stacks, causes, and metadata", () => {
     const cause = new Error("User jane@example.com");
     const input = new Error("Request from 192.168.0.1", { cause });
