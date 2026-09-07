@@ -26,7 +26,7 @@ test("transformed value types widen strings and preserve record structure", () =
   });
 });
 
-test("transformed value types normalize errors and opaque objects", () => {
+test("transformed value types conservatively represent errors and opaque objects", () => {
   class Account {
     readonly email = "jane@example.com" as const;
 
@@ -47,9 +47,27 @@ test("transformed value types normalize errors and opaque objects", () => {
   expect(accountType).toBeTrue();
 
   const error = redactValue(new TypeError("jane@example.com"));
-  const errorType: Equal<typeof error, Error> = true;
+  const errorType: Equal<
+    typeof error,
+    { name?: string; message?: string; stack?: string; cause?: unknown }
+  > = true;
   expect(errorType).toBeTrue();
   expect(error.message).toBe("[REDACTED]");
+
+  const structuralError: Error = {
+    name: "Error",
+    message: "jane@example.com",
+  };
+  const structuralResult = redactValue(structuralError);
+  const structuralType: Equal<
+    typeof structuralResult,
+    { name?: string; message?: string; stack?: string; cause?: unknown }
+  > = true;
+  expect(structuralType).toBeTrue();
+  expect(structuralResult).toEqual({
+    name: "Error",
+    message: "[REDACTED]",
+  });
 });
 
 test("transformed value types omit array subclass members", () => {
@@ -72,4 +90,33 @@ test("transformed value types preserve variadic tuple heads", () => {
 
   expect(resultType).toBeTrue();
   expect(result).toEqual(["[REDACTED]", 1, 2]);
+});
+
+test("transformed value types preserve variadic tuple tails", () => {
+  const input: readonly [...number[], "jane@example.com"] = [1, 2, "jane@example.com"];
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, readonly [...number[], string]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(result).toEqual([1, 2, "[REDACTED]"]);
+});
+
+test("transformed value types omit augmented tuple properties", () => {
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
+    tag: "pii" as const,
+  });
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, string[]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(Reflect.has(result, "tag")).toBeFalse();
+});
+
+test("transformed value types preserve optional tuple positions", () => {
+  const input: readonly ["jane@example.com"?] = ["jane@example.com"];
+  const result = redactValue(input);
+  const resultType: Equal<typeof result, readonly [string?]> = true;
+
+  expect(resultType).toBeTrue();
+  expect(result).toEqual(["[REDACTED]"]);
 });

@@ -84,9 +84,12 @@ const createConsumer = async (
       "const recordType: Equal<typeof protectedRecord, { readonly email?: string }> = true;",
       'const protectedTuple = redactValue(["jane@example.com", 1] as readonly ["jane@example.com", ...number[]]);',
       "const tupleType: Equal<typeof protectedTuple, readonly [string, ...number[]]> = true;",
+      'const protectedTail = redactValue([1, "jane@example.com"] as readonly [...number[], "jane@example.com"]);',
+      "const tailType: Equal<typeof protectedTail, readonly [...number[], string]> = true;",
       "void textType;",
       "void recordType;",
       "void tupleType;",
+      "void tailType;",
     ];
     if (modes.includes("pino")) {
       imports.push(
