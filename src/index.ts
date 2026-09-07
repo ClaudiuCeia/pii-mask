@@ -74,7 +74,7 @@ export type ProtectedValue<T> = T extends string
         : T extends readonly unknown[]
           ? ProtectedArray<T>
           : T extends object
-            ? ProtectedStructuredObject<T>
+            ? ProtectedStructuredObject<T> | ProtectedPossiblePrimitive<T>
             : T;
 
 type ProtectedFunction<T extends Function> = Function extends T
@@ -91,14 +91,20 @@ type ProtectedObjectProjection<T extends object> = object extends T
 
 type ProtectedStructuredObject<T extends object> =
   | ProtectedObjectProjection<T>
-  | (typeof String.prototype extends T ? string : never)
-  | (T extends BoxedStringCandidate ? string : never)
-  | (Error extends T ? Error : never);
+  | (typeof String.prototype extends T ? string : "length" extends keyof T ? string : never)
+  | (Error extends T
+      ? Error
+      : "message" extends keyof T
+        ? Error
+        : "stack" extends keyof T
+          ? Error
+          : never);
 
-interface BoxedStringCandidate {
-  readonly [key: number]: string;
-  readonly length: number;
-}
+type ProtectedPossiblePrimitive<T> =
+  | (number extends T ? number : never)
+  | (boolean extends T ? boolean : never)
+  | (bigint extends T ? bigint : never)
+  | (symbol extends T ? symbol : never);
 
 type ProtectedUnknownObject = { readonly [K in PropertyKey]?: unknown } & {
   readonly [K in ObjectPrototypeKey]?: unknown;
@@ -106,10 +112,10 @@ type ProtectedUnknownObject = { readonly [K in PropertyKey]?: unknown } & {
 
 type ProtectedObject<T extends object> = {
   readonly [
-    K in keyof T as T[K] extends (...arguments_: never[]) => unknown
-      ? K extends ObjectPrototypeKey
-        ? K
-        : never
+    K in keyof T as K extends "toJSON"
+      ? T[K] extends (...arguments_: never[]) => unknown
+        ? never
+        : K
       : K
   ]?: ProtectedObjectValue<T[K]>;
 } & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
@@ -169,10 +175,10 @@ type ProtectedArrayItems<T extends readonly unknown[]> = {
 
 type ProtectedArrayObject<T extends readonly unknown[]> = {
   readonly [
-    K in keyof T as T[K] extends (...arguments_: never[]) => unknown
-      ? K extends ObjectPrototypeKey
-        ? K
-        : never
+    K in keyof T as K extends "toJSON"
+      ? T[K] extends (...arguments_: never[]) => unknown
+        ? never
+        : K
       : K
   ]?: K extends number ? unknown : ProtectedObjectValue<T[K]>;
 } & { readonly [K in Exclude<ObjectPrototypeKey, RetainedObjectPrototypeKey<T>>]?: never };
@@ -294,6 +300,8 @@ const ownKeys = Reflect.ownKeys;
 const reflectApply = Reflect.apply;
 const customInspect = Symbol.for("nodejs.util.inspect.custom");
 const denoCustomInspect = Symbol.for("Deno.customInspect");
+const stringRepeat = String.prototype.repeat;
+const stringSlice = String.prototype.slice;
 const stringValueOf = String.prototype.valueOf;
 const weakMapGet = NativeWeakMap.prototype.get;
 const weakMapSet = NativeWeakMap.prototype.set;
@@ -305,6 +313,12 @@ const setSeen = (seen: WeakMap<object, unknown>, input: object, output: unknown)
   reflectApply(weakMapSet, seen, [input, output]);
 };
 
+const sliceString = (input: string, start: number, end?: number): string =>
+  reflectApply(stringSlice, input, end === undefined ? [start] : [start, end]) as string;
+
+const repeatString = (input: string, count: number): string =>
+  reflectApply(stringRepeat, input, [count]) as string;
+
 /** Find PII spans in free-form text using ts-duckling. */
 export const findPii = (input: string): PIIEntity[] => detector.extract(input);
 
@@ -312,8 +326,28 @@ const selectedEntities = (input: string, kinds?: readonly PIIKind[]): PIIEntity[
   const entities = findPii(input);
   if (kinds === undefined) return entities;
 
-  const selected = new Set<PIIKind>(kinds);
-  return entities.filter((entity) => selected.has(entity.kind));
+  const selected: PIIEntity[] = [];
+  let selectedCount = 0;
+  for (let entityIndex = 0; entityIndex < entities.length; entityIndex += 1) {
+    const entity = entities[entityIndex];
+    if (entity === undefined) continue;
+    let included = false;
+    for (let kindIndex = 0; kindIndex < kinds.length; kindIndex += 1) {
+      if (kinds[kindIndex] === entity.kind) {
+        included = true;
+        break;
+      }
+    }
+    if (!included) continue;
+    defineProperty(selected, selectedCount, {
+      configurable: true,
+      enumerable: true,
+      value: entity,
+      writable: true,
+    });
+    selectedCount += 1;
+  }
+  return selected;
 };
 
 const replaceEntities = (
@@ -325,14 +359,27 @@ const replaceEntities = (
 
   let result = input;
   let boundary = input.length;
-  const ordered = [...entities];
+  const ordered: PIIEntity[] = [];
+  for (let index = 0; index < entities.length; index += 1) {
+    const entity = entities[index];
+    if (entity === undefined) continue;
+    defineProperty(ordered, index, {
+      configurable: true,
+      enumerable: true,
+      value: entity,
+      writable: true,
+    });
+  }
   reflectApply(arraySort, ordered, [
     (left: PIIEntity, right: PIIEntity) => right.start - left.start || right.end - left.end,
   ]);
 
-  for (const entity of ordered) {
+  for (let index = 0; index < ordered.length; index += 1) {
+    const entity = ordered[index];
+    if (entity === undefined) continue;
     if (entity.end > boundary) continue;
-    result = result.slice(0, entity.start) + replacement(entity) + result.slice(entity.end);
+    result =
+      sliceString(result, 0, entity.start) + replacement(entity) + sliceString(result, entity.end);
     boundary = entity.start;
   }
 
@@ -361,9 +408,9 @@ export const maskText = (input: string, options: MaskOptions = {}): string => {
     const visibleStart = Math.min(keepStart, length);
     const visibleEnd = Math.min(keepEnd, length - visibleStart);
     return (
-      entity.text.slice(0, visibleStart) +
-      mask.repeat(length - visibleStart - visibleEnd) +
-      entity.text.slice(length - visibleEnd)
+      sliceString(entity.text, 0, visibleStart) +
+      repeatString(mask, length - visibleStart - visibleEnd) +
+      sliceString(entity.text, length - visibleEnd)
     );
   });
 };
@@ -478,6 +525,11 @@ const transformError = (
       ? snapshot.message.value
       : "";
   const transformed = new NativeError(transform(message));
+  defineProperty(transformed, "stack", {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
   defineProperty(transformed, "toJSON", {
     configurable: true,
     writable: true,

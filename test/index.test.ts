@@ -6,6 +6,7 @@ import {
   findPii,
   maskText,
   maskValue,
+  type PIIKind,
   redactText,
   redactValue,
 } from "../src/index.js";
@@ -78,6 +79,7 @@ describe("structured values", () => {
     };
 
     const result = maskValue(input);
+    if (result instanceof Error) throw new Error("Expected an object projection");
 
     expect<unknown>(result).toEqual({
       message: "Email ****************",
@@ -498,6 +500,83 @@ describe("structured values", () => {
       expect(redactValue(input).email).toBe("[REDACTED]");
     } finally {
       Object.defineProperty(Array.prototype, "sort", sortDescriptor);
+    }
+  });
+
+  test("does not use a replaced array iterator for entity copies", () => {
+    const iteratorDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+    if (iteratorDescriptor === undefined) throw new Error("Array iterator descriptor is missing");
+    const kinds = new Proxy<PIIKind[]>(["email"], {
+      get: (target, key, receiver) => {
+        if (key === "length") {
+          Object.defineProperty(Array.prototype, Symbol.iterator, {
+            configurable: true,
+            value: function* (): Generator<never> {},
+            writable: true,
+          });
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    try {
+      expect(redactText("jane@example.com", { kinds })).toBe("[REDACTED]");
+    } finally {
+      Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+    }
+  });
+
+  test("uses captured string slicing after proxy traversal", () => {
+    const sliceDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "slice");
+    if (sliceDescriptor === undefined) throw new Error("String slice descriptor is missing");
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        getOwnPropertyDescriptor: (target, key) => {
+          Object.defineProperty(String.prototype, "slice", {
+            configurable: true,
+            value: function (this: string): string {
+              return this;
+            },
+            writable: true,
+          });
+          return Object.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    try {
+      expect(redactValue(input).email).toBe("[REDACTED]");
+    } finally {
+      Object.defineProperty(String.prototype, "slice", sliceDescriptor);
+    }
+  });
+
+  test("neutralizes prepareStackTrace for structural errors without stacks", () => {
+    const prepareDescriptor = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    const target = Object.create(null) as object;
+    Object.defineProperty(target, "message", { value: "jane@example.com" });
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor: (value, key) => {
+        if (key === "stack") {
+          Object.defineProperty(Error, "prepareStackTrace", {
+            configurable: true,
+            value: () => "jane@example.com",
+            writable: true,
+          });
+        }
+        return Object.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (!(result instanceof Error)) throw new Error("Expected a protected Error");
+      expect(result.stack).toBeUndefined();
+      expect(result.message).toBe("[REDACTED]");
+    } finally {
+      if (prepareDescriptor === undefined) Reflect.deleteProperty(Error, "prepareStackTrace");
+      else Object.defineProperty(Error, "prepareStackTrace", prepareDescriptor);
     }
   });
 

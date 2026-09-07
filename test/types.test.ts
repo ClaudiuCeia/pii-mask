@@ -67,11 +67,10 @@ test("transformed value types conservatively represent errors and opaque objects
   }
 
   type ProtectedAccount = ProtectedValue<Account>;
-  const accountType: Equal<
-    ProtectedAccount,
-    Projected<{ readonly email?: string; readonly domain?: string }>
-  > = true;
-  expect(accountType).toBeTrue();
+  const emailType: Equal<ProtectedAccount["email"], string | undefined> = true;
+  const labelIsCallable: Extends<NonNullable<ProtectedAccount["label"]>, () => string> = false;
+  expect(emailType).toBeTrue();
+  expect(labelIsCallable).toBeFalse();
 
   const error = redactValue(new TypeError("jane@example.com"));
   const errorBranch: Extends<Error, typeof error> = true;
@@ -178,11 +177,15 @@ test("transformed value types omit array subclass members and preserve inherited
     Array<Projected<{ readonly email?: string }>>,
     typeof accounts
   > = true;
-  const mapIsGuaranteed: "map" extends keyof typeof accounts ? true : false = false;
+  const mapIsGuaranteed: Extends<typeof accounts.map, typeof Array.prototype.map> = false;
   const retained = redactValue({ accounts: new Accounts({ email: "jane@example.com" }) });
-  const retainedMapIsGuaranteed: "map" extends keyof NonNullable<typeof retained.accounts>
-    ? true
-    : false = false;
+  if (typeof retained === "string" || retained instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
+  const retainedMapIsGuaranteed: Extends<
+    NonNullable<typeof retained.accounts>["map"],
+    typeof Array.prototype.map
+  > = false;
   expect(labelsArrayBranch).toBeTrue();
   expect(accountsArrayBranch).toBeTrue();
   expect(mapIsGuaranteed).toBeFalse();
@@ -204,7 +207,7 @@ test("transformed value types represent structural array impostors", () => {
   expect(input.map((value) => value)).toEqual(["jane@example.com"]);
 
   const result = redactValue(input);
-  const mapIsGuaranteed: "map" extends keyof typeof result ? true : false = false;
+  const mapIsGuaranteed: Extends<typeof result.map, typeof Array.prototype.map> = false;
   const toStringIsGuaranteed: Extends<typeof result.toString, () => string> = false;
   expect(mapIsGuaranteed).toBeFalse();
   expect(toStringIsGuaranteed).toBeFalse();
@@ -268,6 +271,38 @@ test("transformed value types include Error outputs for diagnostic supertypes", 
   expect(result.message).toBe("[REDACTED]");
 });
 
+test("transformed value types include Error outputs for extended diagnostic shapes", () => {
+  const input = Object.create(null) as { message: string; requestId: string };
+  Object.defineProperties(input, {
+    message: { value: "jane@example.com", writable: true },
+    requestId: { enumerable: true, value: "request-1", writable: true },
+  });
+  const result = redactValue(input);
+  const errorBranch: Extends<Error, typeof result> = true;
+
+  expect(errorBranch).toBeTrue();
+  expect(result.message).toBe("[REDACTED]");
+});
+
+test("transformed value types include strings for finite boxed-string candidates", () => {
+  const source = "jane@example.com";
+  const input = Object.create(null) as { readonly 0: string; readonly length: 16 };
+  Object.defineProperty(input, "length", { value: source.length });
+  for (let index = 0; index < source.length; index += 1) {
+    Object.defineProperty(input, index, {
+      configurable: false,
+      enumerable: true,
+      value: source[index],
+      writable: false,
+    });
+  }
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+
+  expect(stringBranch).toBeTrue();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
 test("transformed value types allow concealed Object-named data properties", () => {
   const input: object = { toString: "jane@example.com" };
   const result = redactValue(input);
@@ -291,6 +326,35 @@ test("transformed value types retain projected callable Object-named fields", ()
 
   expect(toStringIsAbsent).toBeFalse();
   expect<unknown>(result.toString).toEqual({ email: "[REDACTED]" });
+});
+
+test("transformed value types retain projected callable data fields", () => {
+  const input = {
+    callback: Object.assign(() => "ignored", { email: "jane@example.com" as const }),
+  };
+  const result = redactValue(input);
+  if (typeof result === "string" || result instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
+  const callbackIsAbsent: Extends<typeof result.callback, undefined> = false;
+
+  expect(callbackIsAbsent).toBeFalse();
+  expect<unknown>(result.callback).toEqual({ email: "[REDACTED]" });
+});
+
+test("transformed value types preserve primitives accepted by non-nullish top types", () => {
+  const input: {} = 42;
+  // oxlint-disable-next-line typescript/no-wrapper-object-types -- Verify callers typed with Object.
+  const objectInput: Object = 42;
+  const result = redactValue(input);
+  const objectResult = redactValue(objectInput);
+  const numberBranch: Extends<number, typeof result> = true;
+  const objectNumberBranch: Extends<number, typeof objectResult> = true;
+
+  expect(numberBranch).toBeTrue();
+  expect(objectNumberBranch).toBeTrue();
+  expect(result).toBe(42);
+  expect(objectResult).toBe(42);
 });
 
 test("transformed value types preserve variadic tuple heads", () => {

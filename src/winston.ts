@@ -77,7 +77,11 @@ export const winstonPiiMasking = (options: WinstonPiiMaskingOptions = {}): Logfo
       if (levelDescriptor?.enumerable && messageDescriptor?.enumerable) {
         return protectedFields.info;
       }
-      return restoreRequiredInfo(protectedInfo, protectedFields.level, protectedFields.message);
+      return restoreRequiredInfo(
+        protectedFields.info,
+        protectedFields.level,
+        protectedFields.message,
+      );
     }
     if (typeof protectedInfo !== "object" || protectedInfo === null) return false;
     return restoreRequiredInfo(
