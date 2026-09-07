@@ -77,4 +77,38 @@ describe("winstonPiiMasking", () => {
     expect(entries[0]?.level).toBe("info");
     expect(entries[0]?.ip).toBe("[REDACTED]");
   });
+
+  test("restores non-enumerable required fields before JSON formatting", () => {
+    const entries: string[] = [];
+    const hideMessage = winston.format((info) => {
+      Object.defineProperty(info, "message", {
+        configurable: true,
+        value: info.message,
+        writable: true,
+      });
+      return info;
+    });
+    const capture = winston.format((info) => {
+      const message: unknown = info[Symbol.for("message")];
+      if (typeof message === "string") entries.push(message);
+      return info;
+    });
+    const logger = winston.createLogger({
+      format: winston.format.combine(
+        hideMessage(),
+        winstonPiiMasking({ mode: "redact" }),
+        winston.format.json(),
+        capture(),
+      ),
+      transports: [new winston.transports.Console({ silent: true })],
+    });
+
+    logger.info("Email jane@example.com", { ip: "192.168.0.1" });
+
+    expect(JSON.parse(entries[0] ?? "{}")).toEqual({
+      ip: "[REDACTED]",
+      level: "info",
+      message: "Email [REDACTED]",
+    });
+  });
 });

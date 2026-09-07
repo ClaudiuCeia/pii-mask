@@ -154,6 +154,7 @@ test("transformed value types do not infer runtime identity structurally", () =>
   }
   const describedResult = redactValue(new DescribedValue());
   const describedStringBranch: Extends<string, typeof describedResult> = true;
+  if (typeof describedResult === "string") throw new Error("Expected an object projection");
   const describedToStringIsGuaranteed: Extends<typeof describedResult.toString, () => string> =
     false;
   expect(describedStringBranch).toBeTrue();
@@ -234,16 +235,62 @@ test("transformed value types include primitive outputs for boxed-string superty
   expect<unknown>(result).toBe("[REDACTED]");
 });
 
+test("transformed value types include primitive outputs for boxed-string candidates", () => {
+  const source = "jane@example.com";
+  const input = Object.create(null) as { readonly [key: number]: string; readonly length: 16 };
+  Object.defineProperty(input, "length", { value: source.length });
+  for (let index = 0; index < source.length; index += 1) {
+    Object.defineProperty(input, index, {
+      configurable: false,
+      enumerable: true,
+      value: source[index],
+      writable: false,
+    });
+  }
+  const result = redactValue(input);
+  const stringBranch: Extends<string, typeof result> = true;
+  const resultIsObject: Extends<typeof result, object> = false;
+
+  expect(stringBranch).toBeTrue();
+  expect(resultIsObject).toBeFalse();
+  expect<unknown>(result).toBe("[REDACTED]");
+});
+
+test("transformed value types include Error outputs for diagnostic supertypes", () => {
+  const input = Object.create(null) as { message: string };
+  Object.defineProperty(input, "message", { value: "jane@example.com", writable: true });
+  const result = redactValue(input);
+  const errorBranch: Extends<Error, typeof result> = true;
+  const resultIsOnlyProjected: Extends<typeof result, Projected<{ message?: string }>> = false;
+
+  expect(errorBranch).toBeTrue();
+  expect(resultIsOnlyProjected).toBeFalse();
+  expect(result.message).toBe("[REDACTED]");
+});
+
 test("transformed value types allow concealed Object-named data properties", () => {
   const input: object = { toString: "jane@example.com" };
   const result = redactValue(input);
-  if (typeof result === "string") throw new Error("Expected an object projection");
+  if (typeof result === "string" || result instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
   const toStringCanBePresent: Extends<string, typeof result.toString> = true;
   const toStringIsAbsent: Extends<typeof result.toString, undefined> = false;
 
   expect(toStringCanBePresent).toBeTrue();
   expect(toStringIsAbsent).toBeFalse();
   expect(result.toString).toBe("[REDACTED]");
+});
+
+test("transformed value types retain projected callable Object-named fields", () => {
+  const input = {
+    toString: Object.assign(() => "ignored", { email: "jane@example.com" as const }),
+  };
+  const result = redactValue(input);
+  const toStringIsAbsent: Extends<typeof result.toString, undefined> = false;
+
+  expect(toStringIsAbsent).toBeFalse();
+  expect<unknown>(result.toString).toEqual({ email: "[REDACTED]" });
 });
 
 test("transformed value types preserve variadic tuple heads", () => {

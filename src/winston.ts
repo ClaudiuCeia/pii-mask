@@ -71,7 +71,14 @@ export const winstonPiiMasking = (options: WinstonPiiMaskingOptions = {}): Logfo
 
     const protectedInfo = masker.value(info);
     const protectedFields = readTransformableInfo(protectedInfo);
-    if (protectedFields !== undefined) return protectedFields.info;
+    if (protectedFields !== undefined) {
+      const levelDescriptor = Object.getOwnPropertyDescriptor(protectedInfo, "level");
+      const messageDescriptor = Object.getOwnPropertyDescriptor(protectedInfo, "message");
+      if (levelDescriptor?.enumerable && messageDescriptor?.enumerable) {
+        return protectedFields.info;
+      }
+      return restoreRequiredInfo(protectedInfo, protectedFields.level, protectedFields.message);
+    }
     if (typeof protectedInfo !== "object" || protectedInfo === null) return false;
     return restoreRequiredInfo(
       protectedInfo,
