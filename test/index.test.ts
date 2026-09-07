@@ -131,9 +131,13 @@ describe("structured values", () => {
   });
 
   test("protects boxed strings as one value", () => {
+    class SecretString extends String {}
+
     const result = redactValue(new String("jane@example.com"));
+    const subclassResult = redactValue(new SecretString("jane@example.com"));
 
     expect(result).toBe("[REDACTED]");
+    expect(subclassResult).toBe("[REDACTED]");
   });
 
   test("normalizes callable serializers", () => {

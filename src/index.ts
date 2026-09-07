@@ -236,9 +236,6 @@ const transformValue = (
   const existing = seen.get(input);
   if (existing !== undefined) return existing;
 
-  const boxedString = unboxString(input);
-  if (boxedString !== undefined) return transform(boxedString);
-
   if (input instanceof Error) return transformError(input, transform, seen);
 
   if (Array.isArray(input)) {
@@ -249,6 +246,14 @@ const transformValue = (
   }
 
   const prototype = Object.getPrototypeOf(input);
+  if (
+    prototype === String.prototype ||
+    (prototype !== Object.prototype && prototype !== null && input instanceof String)
+  ) {
+    const boxedString = unboxString(input);
+    if (boxedString !== undefined) return transform(boxedString);
+  }
+
   const result = Object.create(
     prototype === Object.prototype || prototype === null ? prototype : null,
   ) as Record<PropertyKey, unknown>;
