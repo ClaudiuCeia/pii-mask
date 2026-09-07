@@ -6,20 +6,25 @@ type Equal<Left, Right> =
     ? true
     : false;
 
+type Extends<Left, Right> = [Left] extends [Right] ? true : false;
+
 test("transformed value types widen strings and preserve record structure", () => {
-  const result = redactValue({
+  const input = {
     email: "jane@example.com",
     nested: ["192.168.0.1", 42],
-  } as const);
+  } as const;
+  const result = redactValue(input);
 
-  const resultType: Equal<
-    typeof result,
+  const inputBranch: Extends<typeof input, typeof result> = true;
+  const projectedBranch: Extends<
     Readonly<{
       email?: string;
-      nested?: readonly [string, 42];
-    }>
+      nested?: ProtectedValue<typeof input.nested>;
+    }>,
+    typeof result
   > = true;
-  expect(resultType).toBeTrue();
+  expect(inputBranch).toBeTrue();
+  expect(projectedBranch).toBeTrue();
   expect(result).toEqual({
     email: "[REDACTED]",
     nested: ["[REDACTED]", 42],
@@ -40,23 +45,27 @@ test("transformed value types conservatively represent errors and opaque objects
   }
 
   type ProtectedAccount = ProtectedValue<Account>;
-  const accountType: Equal<
-    ProtectedAccount,
-    { readonly email?: string; readonly domain?: string }
+  const accountBranch: Extends<Account, ProtectedAccount> = true;
+  const projectedAccountBranch: Extends<
+    { readonly email?: string; readonly domain?: string },
+    ProtectedAccount
   > = true;
-  expect(accountType).toBeTrue();
+  const accountIsGuaranteed: Extends<ProtectedAccount, Account> = false;
+  expect(accountBranch).toBeTrue();
+  expect(projectedAccountBranch).toBeTrue();
+  expect(accountIsGuaranteed).toBeFalse();
 
   const error = redactValue(new TypeError("jane@example.com"));
-  const errorType: Equal<
-    typeof error,
+  const errorProjection: Extends<
     {
       readonly name?: string;
       readonly message?: string;
       readonly stack?: string;
       readonly cause?: unknown;
-    }
+    },
+    typeof error
   > = true;
-  expect(errorType).toBeTrue();
+  expect(errorProjection).toBeTrue();
   expect(error.message).toBe("[REDACTED]");
 
   const structuralError: Error = {
@@ -64,16 +73,16 @@ test("transformed value types conservatively represent errors and opaque objects
     message: "jane@example.com",
   };
   const structuralResult = redactValue(structuralError);
-  const structuralType: Equal<
-    typeof structuralResult,
+  const structuralProjection: Extends<
     {
       readonly name?: string;
       readonly message?: string;
       readonly stack?: string;
       readonly cause?: unknown;
-    }
+    },
+    typeof structuralResult
   > = true;
-  expect(structuralType).toBeTrue();
+  expect(structuralProjection).toBeTrue();
   expect(structuralResult).toEqual({
     name: "Error",
     message: "[REDACTED]",
@@ -85,15 +94,15 @@ test("transformed value types conservatively represent errors and opaque objects
     groups: "jane@example.com"[][] = [["jane@example.com"]];
   }
   const retained = redactValue(new MutableAccount());
-  const retainedType: Equal<
-    typeof retained,
+  const retainedProjection: Extends<
     {
       readonly email?: string;
-      readonly emails?: readonly string[];
-      readonly groups?: readonly (readonly string[])[];
-    }
+      readonly emails?: ProtectedValue<MutableAccount["emails"]>;
+      readonly groups?: ProtectedValue<MutableAccount["groups"]>;
+    },
+    typeof retained
   > = true;
-  expect(retainedType).toBeTrue();
+  expect(retainedProjection).toBeTrue();
 });
 
 test("transformed value types omit array subclass members and preserve inherited methods", () => {
@@ -106,36 +115,57 @@ test("transformed value types omit array subclass members and preserve inherited
   class Accounts extends Array<{ email: "jane@example.com" }> {}
 
   const labels = redactValue(new Labels("jane@example.com"));
-  const labelsType: Equal<typeof labels, string[]> = true;
+  const labelsArrayBranch: Extends<string[], typeof labels> = true;
   const accounts = redactValue(new Accounts({ email: "jane@example.com" }));
-  const accountsType: Equal<typeof accounts, Array<{ readonly email?: string }>> = true;
-  const retained = redactValue({ accounts });
-  const retainedType: Equal<
-    typeof retained,
-    { readonly accounts?: readonly { readonly email?: string }[] }
+  const accountsArrayBranch: Extends<
+    Array<ProtectedValue<{ email: "jane@example.com" }>>,
+    typeof accounts
   > = true;
-  expect(labelsType).toBeTrue();
-  expect(accountsType).toBeTrue();
-  expect(retainedType).toBeTrue();
+  const mapIsGuaranteed: "map" extends keyof typeof accounts ? true : false = false;
+  const retained = redactValue({ accounts });
+  const retainedInputBranch: Extends<{ accounts: typeof accounts }, typeof retained> = true;
+  expect(labelsArrayBranch).toBeTrue();
+  expect(accountsArrayBranch).toBeTrue();
+  expect(mapIsGuaranteed).toBeFalse();
+  expect(retainedInputBranch).toBeTrue();
   expect(labels).toEqual(["[REDACTED]"]);
-  expect(accounts.map(({ email }) => email)).toEqual(["[REDACTED]"]);
+  expect<unknown>(accounts).toEqual([{ email: "[REDACTED]" }]);
+});
+
+test("transformed value types represent structural array impostors", () => {
+  const target = { 0: "jane@example.com", length: 1 };
+  const input = new Proxy(target, {
+    get: (value, key, receiver) => {
+      if (Reflect.has(value, key)) return Reflect.get(value, key, receiver);
+      const member: unknown = Reflect.get(Array.prototype, key);
+      return typeof member === "function" ? member.bind(value) : member;
+    },
+  }) as unknown as string[];
+
+  expect(input.map((value) => value)).toEqual(["jane@example.com"]);
+
+  const result = redactValue(input);
+  const mapIsGuaranteed: "map" extends keyof typeof result ? true : false = false;
+  expect(mapIsGuaranteed).toBeFalse();
+  expect(Reflect.get(result, "map")).toBeUndefined();
+  expect(result).toEqual({ 0: "[REDACTED]", length: 1 });
 });
 
 test("transformed value types preserve variadic tuple heads", () => {
   const input: readonly ["jane@example.com", ...number[]] = ["jane@example.com", 1, 2];
   const result = redactValue(input);
-  const resultType: Equal<typeof result, readonly [string, ...number[]]> = true;
+  const tupleBranch: Extends<readonly [string, ...number[]], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(tupleBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]", 1, 2]);
 });
 
 test("transformed value types preserve variadic tuple tails", () => {
   const input: readonly [...number[], "jane@example.com"] = [1, 2, "jane@example.com"];
   const result = redactValue(input);
-  const resultType: Equal<typeof result, readonly [...number[], string]> = true;
+  const tupleBranch: Extends<readonly [...number[], string], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(tupleBranch).toBeTrue();
   expect(result).toEqual([1, 2, "[REDACTED]"]);
 });
 
@@ -144,9 +174,9 @@ test("transformed value types omit augmented tuple properties", () => {
     tag: "pii" as const,
   });
   const result = redactValue(input);
-  const resultType: Equal<typeof result, string[]> = true;
+  const arrayBranch: Extends<string[], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(arrayBranch).toBeTrue();
   expect(Reflect.has(result, "tag")).toBeFalse();
 });
 
@@ -155,10 +185,21 @@ test("transformed value types treat overridden array members as augmentations", 
     at: "serializer@example.com" as const,
   });
   const result = redactValue(input);
-  const resultType: Equal<typeof result, string[]> = true;
+  const arrayBranch: Extends<string[], typeof result> = true;
 
-  expect(resultType).toBeTrue();
-  expect(typeof result.at).toBe("function");
+  expect(arrayBranch).toBeTrue();
+  expect(typeof Reflect.get(result, "at")).toBe("function");
+});
+
+test("transformed value types do not claim hidden numeric tuple augmentation values", () => {
+  const input = Object.assign(["jane@example.com"] as ["jane@example.com"], {
+    [7]: { secret: "jane@example.com" as const },
+  });
+  const result = redactValue(input);
+  const hiddenValueType: Equal<(typeof result)[7], unknown> = true;
+
+  expect(hiddenValueType).toBeTrue();
+  expect(result[7]).toEqual({ secret: "[REDACTED]" });
 });
 
 test("transformed value types omit non-index numeric tuple properties", () => {
@@ -167,9 +208,9 @@ test("transformed value types omit non-index numeric tuple properties", () => {
     "01": { secret: "jane@example.com" },
   });
   const result = redactValue(input);
-  const resultType: Equal<typeof result, string[]> = true;
+  const arrayBranch: Extends<string[], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(arrayBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
   expect(Reflect.has(result, "-1")).toBeFalse();
   expect(Reflect.has(result, "01")).toBeFalse();
@@ -180,9 +221,9 @@ test("transformed value types omit integers outside the array-index range", () =
     "4294967295": { secret: "jane@example.com" },
   });
   const result = redactValue(input);
-  const resultType: Equal<typeof result, string[]> = true;
+  const arrayBranch: Extends<string[], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(arrayBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
   expect(Reflect.has(result, "4294967295")).toBeFalse();
 });
@@ -192,27 +233,27 @@ test("transformed value types preserve tuple indices with iterator overrides", (
     [Symbol.iterator]: () => [][Symbol.iterator](),
   });
   const result = redactValue(input);
-  const resultType: Equal<typeof result, string[]> = true;
+  const arrayBranch: Extends<string[], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(arrayBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
 });
 
 test("transformed value types preserve optional tuple positions", () => {
   const input: readonly ["jane@example.com"?] = ["jane@example.com"];
   const result = redactValue(input);
-  const resultType: Equal<typeof result, readonly [string?]> = true;
+  const tupleBranch: Extends<readonly [string?], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(tupleBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]"]);
 });
 
 test("transformed value types preserve optional variadic tuple heads", () => {
   const input: readonly ["jane@example.com"?, ...number[]] = ["jane@example.com", 1, 2];
   const result = redactValue(input);
-  const resultType: Equal<typeof result, readonly [string?, ...number[]]> = true;
+  const tupleBranch: Extends<readonly [string?, ...number[]], typeof result> = true;
 
-  expect(resultType).toBeTrue();
+  expect(tupleBranch).toBeTrue();
   expect(result).toEqual(["[REDACTED]", 1, 2]);
 });
 
@@ -270,7 +311,7 @@ test("transformed value types support long fixed tuples", () => {
     "jane@example.com",
   ] as const;
   const result = redactValue(input);
-  const last: string = result[49];
+  const last: string | undefined = result[49];
 
   expect(last).toBe("[REDACTED]");
   expect(result).toHaveLength(50);
@@ -284,30 +325,49 @@ test("transformed value types support long variadic tuple prefixes", () => {
   ] as const;
   const input: readonly [...typeof prefix, ...string[]] = [...prefix, "jane@example.com"];
   const result = redactValue(input);
-  const lastPrefix: 55 = result[55];
-  const tail: string | undefined = result[56];
+  const lastPrefix: 55 | undefined = result[55];
+  const tail: unknown = result[56];
 
   expect(lastPrefix).toBe(55);
   expect(tail).toBe("[REDACTED]");
 });
 
-test("transformed value types preserve broad function interfaces", () => {
+test("transformed value types represent broad function interface impostors", () => {
   const broad: Function = () => "jane@example.com";
   const callable: CallableFunction = () => "jane@example.com";
   const newable: NewableFunction = class Account {};
   const broadResult = redactValue(broad);
   const callableResult = redactValue(callable);
   const newableResult = redactValue(newable);
-  const broadType: Equal<typeof broadResult, Function> = true;
-  const callableType: Equal<typeof callableResult, CallableFunction> = true;
-  const newableType: Equal<typeof newableResult, NewableFunction> = true;
+  const broadFunctionBranch: Extends<Function, typeof broadResult> = true;
+  const callableFunctionBranch: Extends<CallableFunction, typeof callableResult> = true;
+  const newableFunctionBranch: Extends<NewableFunction, typeof newableResult> = true;
+  const broadIsGuaranteed: Extends<typeof broadResult, Function> = false;
+  const callableIsGuaranteed: Extends<typeof callableResult, CallableFunction> = false;
+  const newableIsGuaranteed: Extends<typeof newableResult, NewableFunction> = false;
 
-  expect(broadType).toBeTrue();
-  expect(callableType).toBeTrue();
-  expect(newableType).toBeTrue();
+  expect(broadFunctionBranch).toBeTrue();
+  expect(callableFunctionBranch).toBeTrue();
+  expect(newableFunctionBranch).toBeTrue();
+  expect(broadIsGuaranteed).toBeFalse();
+  expect(callableIsGuaranteed).toBeFalse();
+  expect(newableIsGuaranteed).toBeFalse();
   expect(broadResult).toBe(broad);
   expect(callableResult).toBe(callable);
   expect(newableResult).toBe(newable);
+
+  const structuralFunction = Object.defineProperties(
+    {},
+    {
+      apply: { get: () => Function.prototype.apply },
+      bind: { get: () => Function.prototype.bind },
+      call: { get: () => Function.prototype.call },
+    },
+  ) as Function;
+  const structuralResult = redactValue(structuralFunction);
+  const applyIsGuaranteed: "apply" extends keyof typeof structuralResult ? true : false = false;
+  expect(applyIsGuaranteed).toBeFalse();
+  expect(Reflect.has(structuralResult, "apply")).toBeFalse();
 });
 
 test("transformed value types preserve construct-only functions", () => {
