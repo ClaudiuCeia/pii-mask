@@ -70,11 +70,13 @@ test("transformed value types conservatively represent errors and opaque objects
   expect(accountType).toBeTrue();
 
   const error = redactValue(new TypeError("jane@example.com"));
-  const errorType: Equal<
+  const errorBranch: Extends<Error, typeof error> = true;
+  const errorIsOnlyProjected: Extends<
     typeof error,
     Projected<{ name?: string; message?: string; stack?: string; cause?: unknown }>
-  > = true;
-  expect(errorType).toBeTrue();
+  > = false;
+  expect(errorBranch).toBeTrue();
+  expect(errorIsOnlyProjected).toBeFalse();
   expect(error.message).toBe("[REDACTED]");
 
   const structuralError: Error = {
@@ -82,11 +84,13 @@ test("transformed value types conservatively represent errors and opaque objects
     message: "jane@example.com",
   };
   const structuralResult = redactValue(structuralError);
-  const structuralType: Equal<
+  const structuralErrorBranch: Extends<Error, typeof structuralResult> = true;
+  const structuralErrorIsOnlyProjected: Extends<
     typeof structuralResult,
     Projected<{ name?: string; message?: string; stack?: string; cause?: unknown }>
-  > = true;
-  expect(structuralType).toBeTrue();
+  > = false;
+  expect(structuralErrorBranch).toBeTrue();
+  expect(structuralErrorIsOnlyProjected).toBeFalse();
   expect<unknown>(structuralResult).toEqual({
     name: "Error",
     message: "[REDACTED]",
@@ -112,8 +116,10 @@ test("transformed value types conservatively represent errors and opaque objects
 
 test("transformed value types do not infer runtime identity structurally", () => {
   const boxedResult = redactValue(new String("jane@example.com"));
-  const boxedIsString: Equal<typeof boxedResult, string> = false;
-  expect(boxedIsString).toBeFalse();
+  const boxedStringBranch: Extends<string, typeof boxedResult> = true;
+  const boxedIsObject: Extends<typeof boxedResult, object> = false;
+  expect(boxedStringBranch).toBeTrue();
+  expect(boxedIsObject).toBeFalse();
   expect<unknown>(boxedResult).toBe("[REDACTED]");
 
   const proxiedString: InstanceType<StringConstructor> = new Proxy(
@@ -121,8 +127,10 @@ test("transformed value types do not infer runtime identity structurally", () =>
     {},
   );
   const proxiedResult = redactValue(proxiedString);
-  const proxiedIsString: Equal<typeof proxiedResult, string> = false;
-  expect(proxiedIsString).toBeFalse();
+  const proxiedStringBranch: Extends<string, typeof proxiedResult> = true;
+  const proxiedIsObject: Extends<typeof proxiedResult, object> = false;
+  expect(proxiedStringBranch).toBeTrue();
+  expect(proxiedIsObject).toBeFalse();
   expect<unknown>(proxiedResult).toBe("[REDACTED]");
 
   const callable = Object.assign(() => "ignored", {

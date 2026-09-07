@@ -65,13 +65,17 @@ export interface PiiMasker {
  */
 export type ProtectedValue<T> = T extends string
   ? string
-  : T extends Function
-    ? ProtectedFunction<T>
-    : T extends readonly unknown[]
-      ? ProtectedArray<T>
-      : T extends object
-        ? ProtectedObject<T>
-        : T;
+  : T extends typeof String.prototype
+    ? string | ProtectedObject<T>
+    : T extends Error
+      ? Error | ProtectedObject<T>
+      : T extends Function
+        ? ProtectedFunction<T>
+        : T extends readonly unknown[]
+          ? ProtectedArray<T>
+          : T extends object
+            ? ProtectedObject<T>
+            : T;
 
 type ProtectedFunction<T extends Function> = Function extends T
   ? ProtectedObject<object>
@@ -504,19 +508,26 @@ const transformValue = (
       value: undefined,
     });
     setSeen(seen, input, result);
-    const length = input.length;
+    const lengthDescriptor = getOwnDataDescriptor(input, "length");
+    if (lengthDescriptor === undefined || typeof lengthDescriptor.value !== "number") return result;
+    const length = lengthDescriptor.value;
+    defineProperty(result, "length", { value: length, writable: true });
     for (let index = 0; index < length; index += 1) {
+      const descriptor = getOwnDataDescriptor(input, index);
+      if (descriptor === undefined) continue;
       defineProperty(result, index, {
         configurable: true,
         enumerable: true,
         writable: true,
-        value: transformValue(input[index], transform, seen),
+        value: transformValue(descriptor.value, transform, seen),
       });
     }
     return result;
   }
 
-  const errorSnapshot = snapshotError(input, errorIsError(input));
+  const brandedError =
+    typeof errorIsError === "function" && reflectApply(errorIsError, NativeError, [input]);
+  const errorSnapshot = snapshotError(input, brandedError);
   if (errorSnapshot !== undefined) {
     return transformError(input, errorSnapshot, transform, seen);
   }

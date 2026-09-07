@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 
-import { maskText, redactText } from "@claudiu-ceia/pii-mask";
+const errorIsErrorDescriptor = Object.getOwnPropertyDescriptor(Error, "isError");
+Object.defineProperty(Error, "isError", { configurable: true, value: undefined, writable: true });
+const { maskText, redactText, redactValue } = await import("@claudiu-ceia/pii-mask");
+if (errorIsErrorDescriptor === undefined) Reflect.deleteProperty(Error, "isError");
+else Object.defineProperty(Error, "isError", errorIsErrorDescriptor);
 
 const modes = new Set(process.argv.slice(2));
 
 assert.equal(maskText("Email jane@example.com"), "Email ****************");
 assert.equal(redactText("IP 192.168.0.1"), "IP [REDACTED]");
+assert.equal(redactValue({ email: "jane@example.com" }).email, "[REDACTED]");
 
 if (modes.has("pino")) {
   const [{ default: pino }, { pinoPiiMasking }] = await Promise.all([

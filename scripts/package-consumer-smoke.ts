@@ -97,6 +97,10 @@ const createConsumer = async (
       "const tailBranch: Extends<readonly [...number[], string], typeof protectedTail> = true;",
       'const protectedOptional = redactValue(["jane@example.com", 1] as readonly ["jane@example.com"?, ...number[]]);',
       "const optionalBranch: Extends<readonly [string?, ...number[]], typeof protectedOptional> = true;",
+      'const protectedBoxedString = redactValue(new String("jane@example.com"));',
+      "const boxedStringBranch: Extends<string, typeof protectedBoxedString> = true;",
+      'const protectedError = redactValue(new Error("jane@example.com"));',
+      "const errorBranch: Extends<Error, typeof protectedError> = true;",
       'const longNumericAugmentation = {} as Record<ThousandDigitKey, { secret: "jane@example.com" }>;',
       'const longNumericTuple = Object.assign(["jane@example.com"] as ["jane@example.com"], longNumericAugmentation);',
       "const protectedLongNumericTuple = redactValue(longNumericTuple);",
@@ -108,6 +112,8 @@ const createConsumer = async (
       "void tupleMapIsGuaranteed;",
       "void tailBranch;",
       "void optionalBranch;",
+      "void boxedStringBranch;",
+      "void errorBranch;",
       "void longNumericTupleBranch;",
     ];
     if (modes.includes("pino")) {
