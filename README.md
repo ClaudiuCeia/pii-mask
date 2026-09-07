@@ -171,7 +171,7 @@ protector.value({ ip: "192.168.1.20" });
 
 `maskValue` and `redactValue` recursively transform string values in arrays, plain objects, and errors. They preserve cycles and return a copy without mutating the input. Dates, buffers, maps, sets, and other class instances are retained as-is.
 
-Their `ProtectedValue<T>` return type widens transformed string literals and preserves unaugmented tuple item structure. Object types, including structurally typed errors, expose optional non-callable data because TypeScript cannot prove runtime prototypes or guarantee that accessors, methods, and subclass state are copied. Augmented tuples and other arrays retain their element type without promising custom or array-subclass members.
+Their `ProtectedValue<T>` return type widens transformed string literals and preserves unaugmented tuple item structure. Object types, including structurally typed errors, expose optional readonly non-callable data because TypeScript cannot prove runtime prototypes or guarantee that accessors, methods, and subclass state are copied. Augmented tuples and other arrays retain their element type without promising custom or array-subclass members.
 
 The optional cache is local to each protector. Every LRU entry retains the original input string as its key and the transformed string as its value. Set `cacheSize: 0` for short-lived sensitive values or environments where this retention is undesirable.
 
