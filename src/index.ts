@@ -313,6 +313,7 @@ const functionBind = Function.prototype.bind;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const getPrototypeOf = Object.getPrototypeOf;
 const setPrototypeOf = Object.setPrototypeOf;
+const mapClear = NativeMap.prototype.clear;
 const mapDelete = NativeMap.prototype.delete;
 const mapGet = NativeMap.prototype.get;
 const mapHas = NativeMap.prototype.has;
@@ -328,6 +329,7 @@ const reflectApply = Reflect.apply;
 const reflectDeleteProperty = Reflect.deleteProperty;
 const regExpExec = NativeRegExp.prototype.exec;
 const setAdd = NativeSet.prototype.add;
+const setClear = NativeSet.prototype.clear;
 const setDelete = NativeSet.prototype.delete;
 const setHas = NativeSet.prototype.has;
 const stringConcat = NativeString.prototype.concat;
@@ -1093,6 +1095,7 @@ type ValueTransform = ((input: string, entities: PIIEntity[]) => string) & {
 type CachedTextTransform = (input: string) => string;
 
 interface CachedTransforms {
+  readonly reset: () => void;
   readonly text: CachedTextTransform;
   readonly value: ValueTransform;
 }
@@ -1397,6 +1400,20 @@ const safeArrayCopyMethods = {
   with: createSafeArrayCopyMethod("with"),
 };
 
+const safeArrayUnscopables = (() => {
+  const source = getOwnDataDescriptor(NativeArray.prototype, Symbol.unscopables)?.value;
+  if (typeof source !== "object" || source === null) return undefined;
+  const result = createObject(null) as object;
+  const keys = ownKeys(source);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
+    const descriptor = getOwnPropertyDescriptor(source, key);
+    if (descriptor !== undefined) defineProperty(result, key, descriptor);
+  }
+  return freezeObject(result);
+})();
+
 const safeArrayPrototype = (() => {
   const result = createObject(null) as object;
   const sources = [NativeObjectPrototype, NativeArray.prototype];
@@ -1425,6 +1442,11 @@ const safeArrayPrototype = (() => {
     [Symbol.iterator]: { configurable: true, value: safeArrayValues, writable: true },
     [Symbol.toPrimitive]: { configurable: true, value: undefined, writable: true },
     [Symbol.toStringTag]: { configurable: true, value: undefined, writable: true },
+    [Symbol.unscopables]: {
+      configurable: true,
+      value: safeArrayUnscopables,
+      writable: true,
+    },
     [customInspect]: { configurable: true, value: undefined, writable: true },
     [denoCustomInspect]: { configurable: true, value: undefined, writable: true },
   });
@@ -1690,10 +1712,11 @@ const withCache = (
   cacheSize: number,
 ): CachedTransforms => {
   if (cacheSize === 0) {
-    return { text: (input) => transform(input), value: transform };
+    return { reset: () => undefined, text: (input) => transform(input), value: transform };
   }
 
   const cache = new NativeMap<string, string>();
+  const cacheClear = reflectApply(functionBind, mapClear, [cache]) as () => void;
   const cacheDelete = reflectApply(functionBind, mapDelete, [cache]) as (input: string) => boolean;
   const cacheGet = reflectApply(functionBind, mapGet, [cache]) as (
     input: string,
@@ -1708,12 +1731,14 @@ const withCache = (
   const structuredAdd = reflectApply(functionBind, setAdd, [structuredInputs]) as (
     input: string,
   ) => Set<string>;
+  const structuredClear = reflectApply(functionBind, setClear, [structuredInputs]) as () => void;
   const structuredDelete = reflectApply(functionBind, setDelete, [structuredInputs]) as (
     input: string,
   ) => boolean;
   const structuredHas = reflectApply(functionBind, setHas, [structuredInputs]) as (
     input: string,
   ) => boolean;
+  let epoch = 0;
   let size = 0;
   const lookup = (input: string): string | undefined => {
     if (!structuredHas(input)) return undefined;
@@ -1753,7 +1778,9 @@ const withCache = (
       cacheSet(input, hit);
       return hit;
     }
-    return store(input, transform(input), false);
+    const initialEpoch = epoch;
+    const transformed = transform(input);
+    return initialEpoch === epoch ? store(input, transformed, false) : transformed;
   };
   const valueTransform = ((input: string, entities: PIIEntity[]): string => {
     const hit = cacheGet(input);
@@ -1765,7 +1792,16 @@ const withCache = (
     return store(input, transform(input, entities), true);
   }) as ValueTransform;
   defineProperty(valueTransform, "peek", { value: lookup });
-  return { text: cachedTextTransform, value: valueTransform };
+  return {
+    reset: () => {
+      cacheClear();
+      structuredClear();
+      epoch += 1;
+      size = 0;
+    },
+    text: cachedTextTransform,
+    value: valueTransform,
+  };
 };
 
 /** Create a reusable text and structured-value protector. */
@@ -1777,22 +1813,39 @@ export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
 
   const redactOptions = options.mode === "redact" ? resolveRedactOptions(options) : undefined;
   const maskOptions = redactOptions === undefined ? resolveMaskOptions(options) : undefined;
+  let requiresCompleteTextShield = false;
   const base = (input: string, entities?: PIIEntity[]): string => {
+    const detected =
+      entities ??
+      (requiresCompleteTextShield
+        ? withProtectedDetectorIntrinsics(
+            () => extractPii(input),
+            protectedStructuredDetectorIntrinsics,
+          )
+        : findPii(input));
     if (redactOptions !== undefined) {
-      return entities === undefined
-        ? redactDetectedText(input, findPii(input), redactOptions)
-        : redactDetectedText(input, entities, redactOptions);
+      return redactDetectedText(input, detected, redactOptions);
     }
     if (maskOptions === undefined) throw new TypeError("Missing mask options");
-    return entities === undefined
-      ? maskDetectedText(input, findPii(input), maskOptions)
-      : maskDetectedText(input, entities, maskOptions);
+    return maskDetectedText(input, detected, maskOptions);
   };
   const transforms = withCache(base, cacheSize);
 
   return {
     text: transforms.text,
-    value: <T>(input: T): ProtectedValue<T> =>
-      protectValue(input, transforms.value, typeof redactOptions?.replacement === "function"),
+    value: <T>(input: T): ProtectedValue<T> => {
+      if (
+        !requiresCompleteTextShield &&
+        ((typeof input === "object" && input !== null) || typeof input === "function")
+      ) {
+        requiresCompleteTextShield = true;
+        transforms.reset();
+      }
+      return protectValue(
+        input,
+        transforms.value,
+        typeof redactOptions?.replacement === "function",
+      );
+    },
   };
 };

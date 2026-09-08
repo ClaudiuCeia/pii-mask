@@ -694,6 +694,36 @@ describe("structured values", () => {
     expect(result.email).toBe("[REDACTED]");
   });
 
+  test("fully guards reusable text detection after structured traversal", () => {
+    const lastIndexOfDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "lastIndexOf");
+    if (lastIndexOfDescriptor === undefined) throw new Error("lastIndexOf descriptor is missing");
+    const poisonedLastIndexOf = (): number => 1_000;
+    const input = new Proxy(
+      { email: "jane@example.com" },
+      {
+        ownKeys(target) {
+          Object.defineProperty(String.prototype, "lastIndexOf", {
+            ...lastIndexOfDescriptor,
+            value: poisonedLastIndexOf,
+          });
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const masker = createPiiMasker({ cacheSize: 0, mode: "redact" });
+
+    try {
+      const protectedValue = masker.value(input);
+      requireObjectProjection(protectedValue);
+      expect(protectedValue.email).toBe("[REDACTED]");
+      expect(String.prototype.lastIndexOf).toBe(poisonedLastIndexOf);
+      expect(masker.text("alice@example.com")).toBe("[REDACTED]");
+      expect(String.prototype.lastIndexOf).toBe(poisonedLastIndexOf);
+    } finally {
+      Object.defineProperty(String.prototype, "lastIndexOf", lastIndexOfDescriptor);
+    }
+  });
+
   test("detects direct strings before traversing later proxy values", () => {
     const getDescriptor = Object.getOwnPropertyDescriptor(Map.prototype, "get");
     if (getDescriptor === undefined) throw new Error("Map get descriptor is missing");
@@ -1543,6 +1573,44 @@ describe("structured values", () => {
     expect(mapped).toEqual(["[REDACTED]"]);
   });
 
+  test("does not share mutable array unscopables", () => {
+    const unscopables = Array.prototype[Symbol.unscopables];
+    if (typeof unscopables !== "object" || unscopables === null) {
+      throw new Error("Array unscopables are missing");
+    }
+    const leakDescriptor = Object.getOwnPropertyDescriptor(unscopables, "leak");
+    const target = ["jane@example.com"];
+    const input = new Proxy(target, {
+      getOwnPropertyDescriptor(value, key) {
+        Object.defineProperty(unscopables, "leak", {
+          configurable: true,
+          value: value[0],
+          writable: true,
+        });
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+
+    try {
+      const result = redactValue(input);
+      if (!Array.isArray(result)) throw new Error("Expected a protected array");
+      const protectedUnscopables = Reflect.get(result, Symbol.unscopables);
+      if (typeof protectedUnscopables !== "object" || protectedUnscopables === null) {
+        throw new Error("Protected array unscopables are missing");
+      }
+      expect(protectedUnscopables).not.toBe(unscopables);
+      expect(Object.getPrototypeOf(protectedUnscopables)).toBeNull();
+      expect(Reflect.get(protectedUnscopables, "copyWithin")).toBe(
+        Reflect.get(unscopables, "copyWithin"),
+      );
+      expect(Reflect.get(protectedUnscopables, "leak")).toBeUndefined();
+      expect(Object.isFrozen(protectedUnscopables)).toBeTrue();
+    } finally {
+      if (leakDescriptor === undefined) Reflect.deleteProperty(unscopables, "leak");
+      else Object.defineProperty(unscopables, "leak", leakDescriptor);
+    }
+  });
+
   test("does not inherit protocol hooks installed during projection", async () => {
     const thenDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "then");
     const target = ["jane@example.com"];
@@ -2108,32 +2176,54 @@ describe("createPiiMasker", () => {
     expect(replacements).toBe(1);
   });
 
-  test("does not trust text cache entries seeded during structured traversal", () => {
+  test("does not trust poisoned text cache entries for structured values", () => {
     const execDescriptor = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec");
     if (execDescriptor === undefined) throw new Error("RegExp exec descriptor is missing");
     const masker = createPiiMasker({ mode: "redact" });
     const email = "jane@example.com";
-    const trigger = new Proxy(Object.create(null) as object, {
-      ownKeys: (target) => {
-        Object.defineProperty(RegExp.prototype, "exec", {
-          ...execDescriptor,
-          value: (): null => null,
-        });
-        expect(masker.text(email)).toBe(email);
-        return Reflect.ownKeys(target);
+
+    try {
+      Object.defineProperty(RegExp.prototype, "exec", {
+        ...execDescriptor,
+        value: (): null => null,
+      });
+      expect(masker.text(email)).toBe(email);
+    } finally {
+      Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
+    }
+
+    expect(masker.value({})).toEqual({});
+    expect(masker.text(email)).toBe("[REDACTED]");
+  });
+
+  test("does not cache text results across a reentrant structured transition", () => {
+    const lastIndexOfDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "lastIndexOf");
+    if (lastIndexOfDescriptor === undefined) throw new Error("lastIndexOf descriptor is missing");
+    let transition = (): void => undefined;
+    const masker = createPiiMasker({
+      mode: "redact",
+      replacement: () => {
+        transition();
+        return "[REDACTED]";
       },
     });
+    transition = () => {
+      transition = () => undefined;
+      masker.value({});
+    };
+    const input = "jane@example.com 192.168.0.1";
 
-    const result = (() => {
-      try {
-        return masker.value({ email, trigger });
-      } finally {
-        Object.defineProperty(RegExp.prototype, "exec", execDescriptor);
-      }
-    })();
+    try {
+      Object.defineProperty(String.prototype, "lastIndexOf", {
+        ...lastIndexOfDescriptor,
+        value: (): number => 1_000,
+      });
+      expect(masker.text(input)).toBe("jane@example.com [REDACTED]");
+    } finally {
+      Object.defineProperty(String.prototype, "lastIndexOf", lastIndexOfDescriptor);
+    }
 
-    requireObjectProjection(result);
-    expect(result.email).toBe("[REDACTED]");
+    expect(masker.text(input)).toBe("[REDACTED] [REDACTED]");
   });
 
   test("does not expose structured cache provenance through text arguments", () => {
