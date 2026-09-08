@@ -21,6 +21,22 @@ describe("pinoPiiMasking", () => {
     expect(entry.msg).toBe("Request from [REDACTED]");
   });
 
+  test("does not cache repeated output strings by default", () => {
+    let replacements = 0;
+    const streamWrite = pinoPiiMasking({
+      mode: "redact",
+      replacement: () => {
+        replacements += 1;
+        return "<pii>";
+      },
+    }).hooks?.streamWrite;
+    if (streamWrite === undefined) throw new Error("Pino masking stream hook is missing");
+
+    expect(streamWrite('{"email":"jane@example.com"}\n')).toBe('{"email":"<pii>"}\n');
+    expect(streamWrite('{"email":"jane@example.com"}\n')).toBe('{"email":"<pii>"}\n');
+    expect(replacements).toBe(2);
+  });
+
   test("protects base and child bindings including bindings added later", () => {
     const lines: string[] = [];
     const logger = pino(

@@ -18,4 +18,4 @@ The detector can produce false negatives and false positives. Applications remai
 
 Structured-value protection does not invoke source accessors, inherited methods, or serializers, but reflective operations on a `Proxy` still invoke its traps. A trap can throw, mutate state, or block synchronously; only pass trusted, terminating proxy handlers to the structured-value APIs.
 
-The optional LRU cache retains original input strings as keys and transformed strings as values until each entry is evicted or its `PiiMasker` instance becomes unreachable. Disable it with `cacheSize: 0` when retaining sensitive strings in memory is not acceptable.
+The LRU cache is disabled by default. Setting `cacheSize` to a positive entry limit retains original input strings as keys and transformed strings as values until eviction or until the `PiiMasker` methods are no longer reachable. The current parser dependency independently retains up to eight complete detector input strings per loaded parser module instance in an entry-count cache; `cacheSize` controls only `pii-mask`'s LRU.

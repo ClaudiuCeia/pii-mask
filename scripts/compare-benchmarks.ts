@@ -64,8 +64,12 @@ const comparisons: Comparison[] = candidate.results
     const baselineMedian = previous.medianNanoseconds;
     const candidateMedian = result.medianNanoseconds;
     const changePercent = ((candidateMedian - baselineMedian) / baselineMedian) * 100;
+    const isPinoScenario = result.name.startsWith("log/");
     const reset =
-      result.name.startsWith("log/") && baseline.pinoHookLifecycle !== candidate.pinoHookLifecycle;
+      (isPinoScenario && baseline.pinoHookLifecycle !== candidate.pinoHookLifecycle) ||
+      (isPinoScenario &&
+        result.name.endsWith("/protected") &&
+        baseline.defaultCacheMode !== candidate.defaultCacheMode);
     return {
       name: result.name,
       baseline: baselineMedian,
@@ -103,7 +107,7 @@ const rows = comparisons.map((comparison) =>
 );
 
 const summary = [
-  `Performance regression threshold: ${thresholdPercent}% on median time/op (1 us absolute floor; */plain reference scenarios excluded; changed Pino hook lifecycles reset log scenarios)`,
+  `Performance regression threshold: ${thresholdPercent}% on median time/op (1 us absolute floor; */plain reference scenarios excluded; changed Pino hook lifecycles reset log scenarios; changed default cache modes reset default protected log scenarios)`,
   "",
   "Benchmark | Baseline (median) | Candidate (median) | Change | Status",
   "--- | ---: | ---: | ---: | :---:",

@@ -647,7 +647,7 @@ describe("structured values", () => {
         },
       },
     );
-    const masker = createPiiMasker({ mode: "redact" });
+    const masker = createPiiMasker({ cacheSize: 1024, mode: "redact" });
 
     const result = (() => {
       try {
@@ -2153,12 +2153,76 @@ describe("createPiiMasker", () => {
     expect(masker.value(["jane@example.com"])).toEqual(["<pii>"]);
   });
 
-  test("caches repeated strings with identical results", () => {
-    const masker = createPiiMasker();
-    const first = masker.text("Email jane@example.com");
-    const second = masker.text("Email jane@example.com");
-    expect(first).toBe("Email ****************");
-    expect(second).toBe(first);
+  test("does not cache repeated strings by default", () => {
+    let replacements = 0;
+    const masker = createPiiMasker({
+      mode: "redact",
+      replacement: () => {
+        replacements += 1;
+        return "<pii>";
+      },
+    });
+
+    expect(masker.text("Email jane@example.com")).toBe("Email <pii>");
+    expect(masker.text("Email jane@example.com")).toBe("Email <pii>");
+    expect(replacements).toBe(2);
+  });
+
+  test("caches repeated strings when explicitly enabled", () => {
+    let replacements = 0;
+    const masker = createPiiMasker({
+      mode: "redact",
+      replacement: () => {
+        replacements += 1;
+        return "<pii>";
+      },
+      cacheSize: 1,
+    });
+
+    expect(masker.text("Email jane@example.com")).toBe("Email <pii>");
+    expect(masker.text("Email jane@example.com")).toBe("Email <pii>");
+    expect(replacements).toBe(1);
+  });
+
+  test("evicts the least recently used string", () => {
+    const transformed: string[] = [];
+    const masker = createPiiMasker({
+      mode: "redact",
+      replacement: (entity) => {
+        transformed.push(entity.text);
+        return "<pii>";
+      },
+      cacheSize: 2,
+    });
+
+    masker.text("first@example.com");
+    masker.text("second@example.com");
+    masker.text("first@example.com");
+    masker.text("third@example.com");
+    masker.text("second@example.com");
+
+    expect(transformed).toEqual([
+      "first@example.com",
+      "second@example.com",
+      "third@example.com",
+      "second@example.com",
+    ]);
+  });
+
+  test("shares an explicitly enabled cache between text and value protection", () => {
+    let replacements = 0;
+    const masker = createPiiMasker({
+      mode: "redact",
+      replacement: () => {
+        replacements += 1;
+        return "<pii>";
+      },
+      cacheSize: 1,
+    });
+
+    expect(masker.text("jane@example.com")).toBe("<pii>");
+    expect(masker.value(["jane@example.com"])).toEqual(["<pii>"]);
+    expect(replacements).toBe(1);
   });
 
   test("reuses cached structured replacements", () => {
@@ -2266,9 +2330,11 @@ describe("createPiiMasker", () => {
   });
 
   test("rejects invalid cache sizes", () => {
-    expect(() => createPiiMasker({ cacheSize: -1 })).toThrow(
-      "cacheSize must be a non-negative safe integer",
-    );
+    for (const cacheSize of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+      expect(() => createPiiMasker({ cacheSize })).toThrow(
+        "cacheSize must be a non-negative safe integer",
+      );
+    }
   });
 
   test("uses the captured integer validator for cache sizes", () => {

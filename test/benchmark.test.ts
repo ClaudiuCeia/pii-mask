@@ -27,6 +27,7 @@ const report = (results: readonly BenchmarkResult[]): BenchmarkReport => ({
   platform: "darwin",
   architecture: "arm64",
   pinoHookLifecycle: "streamWrite",
+  defaultCacheMode: "disabled",
   generatedAt: "2026-09-06T00:00:00.000Z",
   results,
 });
@@ -70,14 +71,14 @@ const runComparator = async (baseline: unknown, candidate: unknown): Promise<Com
 };
 
 const summary = (...rows: readonly string[]): readonly string[] => [
-  "Performance regression threshold: 15% on median time/op (1 us absolute floor; */plain reference scenarios excluded; changed Pino hook lifecycles reset log scenarios)",
+  "Performance regression threshold: 15% on median time/op (1 us absolute floor; */plain reference scenarios excluded; changed Pino hook lifecycles reset log scenarios; changed default cache modes reset default protected log scenarios)",
   "",
   "Benchmark | Baseline (median) | Candidate (median) | Change | Status",
   "--- | ---: | ---: | ---: | :---:",
   ...rows,
 ];
 
-test("the benchmark comparator accepts a valid version 3 Mitata report", async () => {
+test("the benchmark comparator accepts a valid version 4 Mitata report", async () => {
   const result = await runComparator(
     report([resultFixture("maskText/protected", 10_000)]),
     report([resultFixture("maskText/protected", 10_500)]),
@@ -110,7 +111,7 @@ test("the benchmark comparator rejects reports from another schema version", asy
 
 test("the benchmark comparator rejects incomplete report metadata", async () => {
   const valid = report([resultFixture("maskText/protected", 10_000)]);
-  const { runtime: _runtime, ...incomplete } = valid;
+  const { defaultCacheMode: _defaultCacheMode, ...incomplete } = valid;
   const result = await runComparator(incomplete, valid);
 
   expect(result.exitCode).toBe(1);
@@ -179,6 +180,36 @@ test("the benchmark comparator resets log scenarios when the Pino hook lifecycle
     exitCode: 0,
     stdout: summary("log/medium/protected | 4.00 us | 8.00 us | +100.00% | RESET"),
     error: undefined,
+  });
+});
+
+test("the benchmark comparator resets default log scenarios when the cache default changes", async () => {
+  const baseline = {
+    ...report([resultFixture("log/medium/protected", 4_000)]),
+    defaultCacheMode: "enabled" as const,
+  };
+  const candidate = report([resultFixture("log/medium/protected", 8_000)]);
+  const result = await runComparator(baseline, candidate);
+
+  expect(result).toEqual({
+    exitCode: 0,
+    stdout: summary("log/medium/protected | 4.00 us | 8.00 us | +100.00% | RESET"),
+    error: undefined,
+  });
+});
+
+test("the benchmark comparator keeps explicit cache scenarios gated", async () => {
+  const baseline = {
+    ...report([resultFixture("log/medium/cached", 4_000)]),
+    defaultCacheMode: "enabled" as const,
+  };
+  const candidate = report([resultFixture("log/medium/cached", 8_000)]);
+  const result = await runComparator(baseline, candidate);
+
+  expect(result).toEqual({
+    exitCode: 1,
+    stdout: summary("log/medium/cached | 4.00 us | 8.00 us | +100.00% | FAIL"),
+    error: "Performance budget exceeded by: log/medium/cached",
   });
 });
 

@@ -67,7 +67,7 @@ console.log(event.client.ip);
 - Provides redaction and character masking through one detector set.
 - Preserves cycles and clones supported arrays, plain objects, and `Error` values.
 - Includes a standard Pino hook and a Winston format.
-- Uses configurable PII kinds and a bounded LRU cache.
+- Uses configurable PII kinds and an optional bounded LRU cache.
 - Supports Bun 1.3+, Deno 2.9+, and Node.js 24+ from one ESM package.
 
 ## Detected PII
@@ -173,7 +173,7 @@ protector.value({ ip: "192.168.1.20" });
 
 Their `ProtectedValue<T>` return type widens transformed string literals and preserves a precise branch for unaugmented tuple items. Because TypeScript is structurally typed, it cannot prove runtime brands from object types. Array-shaped inputs therefore expose both actual-array and conservative object projections, while non-callable object types also expose possible primitive-string and `Error` results. Validate the runtime shape before using branch-specific members. Object and function projections expose optional readonly protected data, with unknown fields for broad static types. Augmented arrays retain their element type when it is recoverable, while hidden numeric tuple augmentations fall back to `unknown[]` rather than claiming an incompatible element type.
 
-The optional cache is local to each protector. Every LRU entry retains the original input string as its key and the transformed string as its value. Set `cacheSize: 0` for short-lived sensitive values or environments where this retention is undesirable.
+The cache is disabled by default and local to each protector. Set `cacheSize` to a positive entry limit to enable it. Every LRU entry retains the original input string as its key and the transformed string as its value until eviction or until the protector's methods are no longer reachable. The current parser dependency independently retains up to eight complete detector input strings per loaded parser module instance in an entry-count cache; `cacheSize` controls only `pii-mask`'s LRU.
 
 ## Performance
 
@@ -193,7 +193,7 @@ Pattern matching reduces accidental PII exposure. It does not prove that data is
 - Object keys are not inspected or transformed.
 - Unknown and domain-specific identifiers require separate rules.
 - Non-string scalar values are not transformed.
-- The optional cache retains original and transformed strings in memory.
+- An explicitly enabled cache retains original and transformed strings in memory.
 - Logger output can still expose data through serializers, transports, or values added after the adapter runs.
 
 Combine value detection with allowlists, known-path redaction, access controls, retention limits, and tests built from your own data formats. Report vulnerabilities privately through [GitHub security advisories](https://github.com/ClaudiuCeia/pii-mask/security/advisories/new); see the [security policy](https://github.com/ClaudiuCeia/pii-mask/blob/main/SECURITY.md) for details.

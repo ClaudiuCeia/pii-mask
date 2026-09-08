@@ -10,6 +10,7 @@ import {
 } from "./benchmark-report.js";
 
 type BenchmarkApi = Readonly<{
+  createPiiMasker(options?: Record<string, unknown>): { text(input: string): string };
   findPii(input: string): readonly unknown[];
   maskText(input: string, options?: Record<string, unknown>): string;
   maskValue<T>(input: T, options?: Record<string, unknown>): T;
@@ -90,6 +91,25 @@ const plainLogger = pino(loggerOptions, sinkWriter);
 const pinoMasking = pinoPiiMasking();
 const pinoHookLifecycle = "streamWrite" in pinoMasking.hooks ? "streamWrite" : "logMethod";
 const protectedLogger = pino({ ...loggerOptions, ...pinoMasking }, sinkWriter);
+const cachedLogger = pino(
+  { ...loggerOptions, ...pinoPiiMasking({ cacheSize: 1_024 }) },
+  sinkWriter,
+);
+
+let cacheProbeCalls = 0;
+const cacheProbe = api.createPiiMasker({
+  mode: "redact",
+  replacement: () => {
+    cacheProbeCalls += 1;
+    return "[PII]";
+  },
+});
+cacheProbe.text("cache-probe@example.com");
+cacheProbe.text("cache-probe@example.com");
+let defaultCacheMode: BenchmarkReport["defaultCacheMode"];
+if (cacheProbeCalls === 1) defaultCacheMode = "enabled";
+else if (cacheProbeCalls === 2) defaultCacheMode = "disabled";
+else throw new Error(`Unable to determine default cache mode from ${cacheProbeCalls} transforms`);
 
 const smallPayload = { reqId: "req_9f2c7a", durationMs: 13, status: 200 };
 const mediumPayload = {
@@ -117,8 +137,7 @@ const largePayload = {
   })),
 };
 
-// Unique: same shape as medium, but fresh PII per operation. The cache
-// cannot help, so this isolates worst-case detection overhead.
+// A fresh email on every operation prevents the complete entry from warming.
 let uniqueCounter = 0;
 const uniquePayload = () => {
   uniqueCounter += 1;
@@ -146,11 +165,15 @@ register("log/medium/plain", () => plainLogger.info(mediumPayload, "POST /api/us
 register("log/medium/protected", () =>
   protectedLogger.info(mediumPayload, "POST /api/users/verify"),
 );
+register("log/medium/cached", () => cachedLogger.info(mediumPayload, "POST /api/users/verify"));
 register("log/medium-unique/plain", () =>
   plainLogger.info(uniquePayload(), "POST /api/users/verify"),
 );
 register("log/medium-unique/protected", () =>
   protectedLogger.info(uniquePayload(), "POST /api/users/verify"),
+);
+register("log/medium-unique/cached", () =>
+  cachedLogger.info(uniquePayload(), "POST /api/users/verify"),
 );
 register("log/large/plain", () => plainLogger.info(largePayload, "batch import finished"));
 register("log/large/protected", () => protectedLogger.info(largePayload, "batch import finished"));
@@ -188,6 +211,7 @@ const report: BenchmarkReport = {
   platform: process.platform,
   architecture: process.arch,
   pinoHookLifecycle,
+  defaultCacheMode,
   generatedAt: new Date().toISOString(),
   results,
 };
