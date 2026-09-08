@@ -148,6 +148,18 @@ test("transformed value types do not infer runtime identity structurally", () =>
   expect(toStringIsAbsent).toBeFalse();
   expect<unknown>(callableResult).toEqual({ email: "[REDACTED]" });
 
+  const callableError = Object.defineProperties(() => "ignored", {
+    message: { value: "jane@example.com" },
+    name: { value: "Error" },
+  }) as (() => string) & Error;
+  const callableErrorResult = redactValue(callableError);
+  const callableErrorType: Equal<
+    typeof callableErrorResult,
+    Projected<{ cause?: unknown; message?: string; name?: string; stack?: string }>
+  > = true;
+  expect(callableErrorType).toBeTrue();
+  expect<unknown>(callableErrorResult).toEqual({});
+
   class DescribedValue {
     toString(): string {
       return "jane@example.com";
@@ -640,13 +652,22 @@ test("transformed value types project broad function interfaces", () => {
   const broadResult = redactValue(broad);
   const callableResult = redactValue(callable);
   const newableResult = redactValue(newable);
-  const broadType: Equal<typeof broadResult, OpaqueProjected> = true;
-  const callableType: Equal<typeof callableResult, OpaqueProjected> = true;
-  const newableType: Equal<typeof newableResult, OpaqueProjected> = true;
+  const broadType: Equal<typeof broadResult, string | Error | OpaqueProjected> = true;
+  const callableType: Equal<typeof callableResult, string | Error | OpaqueProjected> = true;
+  const newableType: Equal<typeof newableResult, string | Error | OpaqueProjected> = true;
 
   expect(broadType).toBeTrue();
   expect(callableType).toBeTrue();
   expect(newableType).toBeTrue();
+  if (typeof broadResult === "string" || broadResult instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
+  if (typeof callableResult === "string" || callableResult instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
+  if (typeof newableResult === "string" || newableResult instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
   expect(Object.getPrototypeOf(broadResult)).toBeNull();
   expect(Object.getPrototypeOf(callableResult)).toBeNull();
   expect(Object.getPrototypeOf(newableResult)).toBeNull();
@@ -660,9 +681,70 @@ test("transformed value types project broad function interfaces", () => {
     },
   ) as Function;
   const structuralResult = redactValue(structuralFunction);
-  const structuralType: Equal<typeof structuralResult, OpaqueProjected> = true;
+  const structuralType: Equal<typeof structuralResult, string | Error | OpaqueProjected> = true;
   expect(structuralType).toBeTrue();
+  if (typeof structuralResult === "string" || structuralResult instanceof Error) {
+    throw new Error("Expected an object projection");
+  }
   expect(Reflect.has(structuralResult, "apply")).toBeFalse();
+
+  const boxedFunction: Function = Object.assign(new String("jane@example.com"), {
+    [Symbol.hasInstance]: Function.prototype[Symbol.hasInstance],
+    [Symbol.metadata]: null,
+    apply: Function.prototype.apply,
+    arguments: null,
+    bind: Function.prototype.bind,
+    call: Function.prototype.call,
+    caller: Function.prototype,
+    name: "String",
+    prototype: {},
+  });
+  const boxedResult = redactValue(boxedFunction);
+  const boxedStringBranch: Extends<string, typeof boxedResult> = true;
+  const boxedErrorBranch: Extends<Error, typeof boxedResult> = true;
+  expect(boxedStringBranch).toBeTrue();
+  expect(boxedErrorBranch).toBeTrue();
+  expect<unknown>(boxedResult).toBe("[REDACTED]");
+
+  const augmentedBoxedFunction: Function & typeof String.prototype & { readonly tag: "boxed" } =
+    Object.assign(new String("jane@example.com"), {
+      [Symbol.hasInstance]: Function.prototype[Symbol.hasInstance],
+      [Symbol.metadata]: null,
+      apply: Function.prototype.apply,
+      arguments: null,
+      bind: Function.prototype.bind,
+      call: Function.prototype.call,
+      caller: Function.prototype,
+      name: "String",
+      prototype: {},
+      tag: "boxed" as const,
+    });
+  const augmentedBoxedResult = redactValue(augmentedBoxedFunction);
+  const augmentedBoxedType: Equal<typeof augmentedBoxedResult, string | Error | OpaqueProjected> =
+    true;
+  expect(augmentedBoxedType).toBeTrue();
+  expect<unknown>(augmentedBoxedResult).toBe("[REDACTED]");
+
+  interface BrandedFunction extends Function {
+    readonly tag: "error";
+  }
+  const brandedError: BrandedFunction & Error = Object.assign(new Error("jane@example.com"), {
+    [Symbol.hasInstance]: Function.prototype[Symbol.hasInstance],
+    [Symbol.metadata]: null,
+    apply: Function.prototype.apply,
+    arguments: null,
+    bind: Function.prototype.bind,
+    call: Function.prototype.call,
+    caller: Function.prototype,
+    length: 0,
+    prototype: {},
+    tag: "error" as const,
+  });
+  const brandedErrorResult = redactValue(brandedError);
+  const brandedErrorType: Equal<typeof brandedErrorResult, string | Error | OpaqueProjected> = true;
+  expect(brandedErrorType).toBeTrue();
+  if (!(brandedErrorResult instanceof Error)) throw new Error("Expected a protected Error");
+  expect(brandedErrorResult.message).toBe("[REDACTED]");
 });
 
 test("transformed value types project construct-only functions", () => {
@@ -679,4 +761,19 @@ test("transformed value types project construct-only functions", () => {
   expect(resultType).toBeTrue();
   expect(Object.getPrototypeOf(result)).toBeNull();
   expect<unknown>(result).toEqual({});
+
+  class ShadowedConstructor {
+    static readonly apply = "jane@example.com";
+    readonly email = "jane@example.com";
+  }
+  const shadowedResult = redactValue(ShadowedConstructor);
+  const shadowedType: Equal<
+    typeof shadowedResult,
+    Projected<{
+      apply?: string;
+      prototype?: string | Error | Projected<{ readonly email?: string }>;
+    }>
+  > = true;
+  expect(shadowedType).toBeTrue();
+  expect<unknown>(shadowedResult).toEqual({ apply: "[REDACTED]" });
 });

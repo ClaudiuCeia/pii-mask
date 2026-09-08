@@ -65,25 +65,25 @@ export interface PiiMasker {
  */
 export type ProtectedValue<T> = T extends string
   ? string
-  : T extends typeof String.prototype
-    ? string | ProtectedObject<T>
-    : T extends Error
-      ? string | Error | ProtectedObject<T>
-      : T extends Function
-        ? ProtectedFunction<T>
-        : T extends readonly unknown[]
-          ? ProtectedArray<T>
-          : T extends object
-            ? ProtectedStructuredObject<T> | ProtectedPossiblePrimitive<T>
-            : T;
+  : T extends ConcreteFunction
+    ? ProtectedObject<T>
+    : T extends Function
+      ? ProtectedBroadFunction
+      : T extends typeof String.prototype
+        ? string | ProtectedObject<T>
+        : T extends Error
+          ? string | Error | ProtectedObject<T>
+          : T extends readonly unknown[]
+            ? ProtectedArray<T>
+            : T extends object
+              ? ProtectedStructuredObject<T> | ProtectedPossiblePrimitive<T>
+              : T;
 
-type ProtectedFunction<T extends Function> = Function extends T
-  ? ProtectedUnknownObject
-  : CallableFunction extends T
-    ? ProtectedUnknownObject
-    : NewableFunction extends T
-      ? ProtectedUnknownObject
-      : ProtectedObject<T>;
+type ConcreteFunction =
+  | ((...arguments_: never[]) => unknown)
+  | (abstract new (...arguments_: never[]) => unknown);
+
+type ProtectedBroadFunction = string | Error | ProtectedUnknownObject;
 
 type ProtectedObjectProjection<T extends object> = object extends T
   ? ProtectedUnknownObject
@@ -1771,7 +1771,7 @@ const withCache = (
 /** Create a reusable text and structured-value protector. */
 export const createPiiMasker = (options: PiiMaskerOptions = {}): PiiMasker => {
   const cacheSize = options.cacheSize ?? DEFAULT_CACHE_SIZE;
-  if (!Number.isSafeInteger(cacheSize) || cacheSize < 0) {
+  if (!numberIsSafeInteger(cacheSize) || cacheSize < 0) {
     throw new RangeError("cacheSize must be a non-negative safe integer");
   }
 

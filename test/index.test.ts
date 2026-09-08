@@ -2180,4 +2180,25 @@ describe("createPiiMasker", () => {
       "cacheSize must be a non-negative safe integer",
     );
   });
+
+  test("uses the captured integer validator for cache sizes", () => {
+    const originalIsSafeInteger = Number.isSafeInteger;
+    const options = new Proxy(
+      { cacheSize: Number.NaN },
+      {
+        get(target, key, receiver) {
+          if (key === "cacheSize") Number.isSafeInteger = () => true;
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+
+    try {
+      expect(() => createPiiMasker(options)).toThrow(
+        "cacheSize must be a non-negative safe integer",
+      );
+    } finally {
+      Number.isSafeInteger = originalIsSafeInteger;
+    }
+  });
 });
