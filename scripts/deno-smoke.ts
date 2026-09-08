@@ -7,7 +7,10 @@ import { winstonPiiMasking } from "../src/winston.ts";
 
 const deno = (
   globalThis as typeof globalThis & {
-    Deno: { test: (name: string, test: () => void | Promise<void>) => void };
+    Deno: {
+      inspect: (value: unknown) => string;
+      test: (name: string, test: () => void | Promise<void>) => void;
+    };
   }
 ).Deno;
 
@@ -23,8 +26,67 @@ deno.test("detects PII entities", () => {
 });
 
 deno.test("protects structured data", () => {
-  assert.equal(maskValue({ message: "Email jane@example.com" }).message, "Email ****************");
-  assert.equal(redactValue({ message: "Email jane@example.com" }).message, "Email [REDACTED]");
+  const masked = maskValue({ message: "Email jane@example.com" });
+  const redacted = redactValue({ message: "Email jane@example.com" });
+  if (typeof masked === "string" || masked instanceof Error) {
+    throw new Error("Expected a masked object projection");
+  }
+  if (typeof redacted === "string" || redacted instanceof Error) {
+    throw new Error("Expected a redacted object projection");
+  }
+  assert.equal(masked.message, "Email ****************");
+  assert.equal(redacted.message, "Email [REDACTED]");
+});
+
+deno.test("does not inherit Deno inspection hooks", () => {
+  const inspectKey = Symbol.for("Deno.customInspect");
+  const arrayDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, inspectKey);
+  const errorDescriptor = Object.getOwnPropertyDescriptor(Error.prototype, inspectKey);
+  let arrayInspections = 0;
+  let errorInspections = 0;
+  const array = new Proxy(["jane@example.com"], {
+    getOwnPropertyDescriptor: (target, key) => {
+      Object.defineProperty(Array.prototype, inspectKey, {
+        configurable: true,
+        value: () => {
+          arrayInspections += 1;
+          return target[0];
+        },
+      });
+      return Object.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const target = new Error("jane@example.com");
+  const error = new Proxy(target, {
+    getOwnPropertyDescriptor: (value, key) => {
+      Object.defineProperty(Error.prototype, inspectKey, {
+        configurable: true,
+        value: () => {
+          errorInspections += 1;
+          return value.message;
+        },
+      });
+      return Object.getOwnPropertyDescriptor(value, key);
+    },
+  });
+
+  try {
+    const protectedArray = redactValue(array);
+    const protectedError = redactValue(error);
+    if (!Array.isArray(protectedArray)) throw new Error("Expected a protected array");
+    if (typeof protectedError === "string") throw new Error("Expected a protected Error");
+    deno.inspect(protectedArray);
+    deno.inspect(protectedError);
+    assert.equal(arrayInspections, 0);
+    assert.equal(errorInspections, 0);
+    assert.equal(protectedArray[0], "[REDACTED]");
+    assert.equal(protectedError.message, "[REDACTED]");
+  } finally {
+    if (arrayDescriptor === undefined) Reflect.deleteProperty(Array.prototype, inspectKey);
+    else Object.defineProperty(Array.prototype, inspectKey, arrayDescriptor);
+    if (errorDescriptor === undefined) Reflect.deleteProperty(Error.prototype, inspectKey);
+    else Object.defineProperty(Error.prototype, inspectKey, errorDescriptor);
+  }
 });
 
 deno.test("integrates with Pino", () => {

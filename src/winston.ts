@@ -9,6 +9,12 @@
 import winston, { type Logform } from "winston";
 import { createPiiMasker, type PiiMaskerOptions } from "./index.js";
 
+const createObject = Object.create;
+const defineProperties = Object.defineProperties;
+const defineProperty = Object.defineProperty;
+const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const ownKeys = Reflect.ownKeys;
+
 /** Options accepted by {@link winstonPiiMasking}. Same as {@link PiiMaskerOptions}. */
 export type WinstonPiiMaskingOptions = PiiMaskerOptions;
 
@@ -33,16 +39,19 @@ const restoreRequiredInfo = (
   level: string,
   message: unknown,
 ): Logform.TransformableInfo => {
-  const result = Object.create(null) as Record<PropertyKey, unknown>;
-  for (const key of Reflect.ownKeys(protectedInfo)) {
+  const result = createObject(null) as Record<PropertyKey, unknown>;
+  const keys = ownKeys(protectedInfo);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) continue;
     if (key === "level" || key === "message") continue;
 
-    const descriptor = Object.getOwnPropertyDescriptor(protectedInfo, key);
+    const descriptor = getOwnPropertyDescriptor(protectedInfo, key);
     if (descriptor?.enumerable && "value" in descriptor) {
-      Object.defineProperty(result, key, descriptor);
+      defineProperty(result, key, descriptor);
     }
   }
-  Object.defineProperties(result, {
+  defineProperties(result, {
     level: { configurable: true, enumerable: true, value: level, writable: true },
     message: { configurable: true, enumerable: true, value: message, writable: true },
   });
@@ -71,7 +80,18 @@ export const winstonPiiMasking = (options: WinstonPiiMaskingOptions = {}): Logfo
 
     const protectedInfo = masker.value(info);
     const protectedFields = readTransformableInfo(protectedInfo);
-    if (protectedFields !== undefined) return protectedFields.info;
+    if (protectedFields !== undefined) {
+      const levelDescriptor = getOwnPropertyDescriptor(protectedInfo, "level");
+      const messageDescriptor = getOwnPropertyDescriptor(protectedInfo, "message");
+      if (levelDescriptor?.enumerable && messageDescriptor?.enumerable) {
+        return protectedFields.info;
+      }
+      return restoreRequiredInfo(
+        protectedFields.info,
+        protectedFields.level,
+        protectedFields.message,
+      );
+    }
     if (typeof protectedInfo !== "object" || protectedInfo === null) return false;
     return restoreRequiredInfo(
       protectedInfo,

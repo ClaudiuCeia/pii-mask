@@ -16,4 +16,6 @@ Security fixes target the latest published version. Upgrade before reporting an 
 
 The detector can produce false negatives and false positives. Applications remain responsible for testing their own data formats and protecting unknown or domain-specific identifiers.
 
+Structured-value protection does not invoke source accessors, inherited methods, or serializers, but reflective operations on a `Proxy` still invoke its traps. A trap can throw, mutate state, or block synchronously; only pass trusted, terminating proxy handlers to the structured-value APIs.
+
 The optional LRU cache retains original input strings as keys and transformed strings as values until each entry is evicted or its `PiiMasker` instance becomes unreachable. Disable it with `cacheSize: 0` when retaining sensitive strings in memory is not acceptable.
