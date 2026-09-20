@@ -81,7 +81,7 @@
     "hooks:uninstall": "bun run scripts/hooks.ts uninstall"
   },
   "dependencies": {
-    "@claudiu-ceia/ts-duckling": "0.7.2"
+    "@claudiu-ceia/ts-duckling": "0.7.3"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
