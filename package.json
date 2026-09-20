@@ -1,6 +1,6 @@
 {
   "name": "@claudiu-ceia/pii-mask",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local PII detection and redaction for TypeScript logs and structured data, with Pino and Winston adapters.",
   "keywords": [
     "data-masking",
